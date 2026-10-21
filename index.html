@@ -90,6 +90,7 @@ header.top h1 { font-size: 19px; margin: 0; letter-spacing: .02em; white-space: 
 .status { margin-top: 12px; font-size: 13px; color: var(--muted); min-height: 1.4em; scroll-margin-top: 12px; }
 .status code { font-family: var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; color: var(--fg); }
 
+.peek { margin-top: 4px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .results { display: grid; gap: 10px; margin-top: 8px; }
 .card { display: grid; grid-template-columns: 76px 1fr; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 10px; text-align: left; width: 100%; }
 .card img, .card .ph { width: 76px; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 6px; background: var(--line); }
@@ -177,6 +178,7 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
     </form>
 
     <div class="status" id="status"></div>
+    <div class="peek" id="ocrPeek" hidden></div>
     <div class="results" id="results"></div>
   </section>
 
@@ -1102,6 +1104,9 @@ async function startScan() {
     let parsed, words;
     try { const o = await ocrWords(strip); parsed = parseText(o.text); words = o.words; } catch { await sleep(300); continue; }
     if (!scanning || my !== loopId) break;
+    // 实时显示正在读到的文字，方便看出卡在哪一步
+    $("ocrPeek").hidden = false;
+    $("ocrPeek").textContent = "正在读到：" + (parsed.raw.slice(0, 70) || "（什么都没读到）");
     recent.push(parsed); if (recent.length > 5) recent.shift();
     if (parsed.nums.length) {
       const sig = numsLabel(parsed);
@@ -1157,7 +1162,7 @@ async function startScan() {
     await sleep(80);
   }
 }
-function stopScan() { scanning = false; loopId++; closeCam(); setScanUI("idle"); }
+function stopScan() { scanning = false; loopId++; closeCam(); setScanUI("idle"); $("ocrPeek").hidden = true; }
 
 $("scanBtn").onclick = () => { if (scanning) { stopScan(); setStatus(""); } else startScan(); };
 
