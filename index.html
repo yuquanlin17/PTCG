@@ -1,0 +1,1443 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="卡价扫描">
+<link rel="manifest" href="manifest.json">
+<title>PTCG 卡价扫描</title>
+<style>
+/* 布局：底部双标签（扫描 / 收藏），单列手机优先 */
+:root {
+  --bg: #f3f4f7;
+  --surface: #ffffff;
+  --fg: #16181f;
+  --muted: #6b7080;
+  --line: #e1e3ea;
+  --accent: #e2a019;       /* 闪卡金 */
+  --accent-ink: #1b1400;
+  --good: #1f9d5b;
+  --bad: #d0423a;
+  --shade: rgba(10, 12, 20, .55);
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1116; --surface: #1a1d25; --fg: #eef0f5; --muted: #9096a6; --line: #2a2e39;
+    --accent: #f0b43a; --accent-ink: #1b1400; --good: #3cc47c; --bad: #ef6a62; --shade: rgba(0,0,0,.6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1116; --surface: #1a1d25; --fg: #eef0f5; --muted: #9096a6; --line: #2a2e39;
+  --accent: #f0b43a; --accent-ink: #1b1400; --good: #3cc47c; --bad: #ef6a62; --shade: rgba(0,0,0,.6);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 var(--font);
+  -webkit-tap-highlight-color: transparent;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.app { max-width: 560px; margin: 0 auto; min-height: 100%;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header.top { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-block: 12px 10px; }
+header.top h1 { font-size: 19px; margin: 0; letter-spacing: .02em; white-space: nowrap; }
+
+/* 货币切换 */
+.seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; border-radius: 7px; padding: 4px 8px; font-size: 12.5px; font-family: var(--mono); color: var(--muted); white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+
+.viewfinder { position: relative; width: 100%; aspect-ratio: 3 / 4; max-width: 100%; background: #000; border-radius: 14px; overflow: hidden; }
+.viewfinder.idle { aspect-ratio: auto; height: 150px; }
+.viewfinder video, .viewfinder img.preview { width: 100%; height: 100%; object-fit: cover; display: block; }
+.viewfinder img.preview { object-fit: contain; }
+.guide { position: absolute; left: 50%; top: 50%; width: 72%; aspect-ratio: 63 / 88; transform: translate(-50%, -50%);
+  border: 2px solid rgba(255,255,255,.9); border-radius: 10px; box-shadow: 0 0 0 2000px var(--shade); pointer-events: none; }
+.guide::after { content: "卡底部编号对准这条线"; position: absolute; left: -2px; right: -2px; bottom: -2px; height: 15%;
+  border: 2px dashed var(--accent); border-radius: 0 0 10px 10px; color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; text-shadow: 0 1px 2px #000; }
+.guide.scanning::after { animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 50% { border-color: rgba(255,255,255,.35); } }
+.vf-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #cfd3dd; text-align: center; padding: 20px; font-size: 14px; }
+.vf-empty small { font-size: 12px; opacity: .75; }
+
+.scanbtn { width: 100%; margin-top: 10px; padding: 15px; font-size: 17px; font-weight: 700; border-radius: 14px;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+.scanbtn.stop { background: var(--surface); color: var(--fg); border-color: var(--line); }
+.linkrow { display: flex; justify-content: center; gap: 24px; margin-top: 6px; }
+.linkbtn { background: none; border: 0; color: var(--muted); font-size: 14px; padding: 8px 2px; text-decoration: underline; text-underline-offset: 3px; }
+
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 12px; font-weight: 600; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn:disabled { opacity: .5; }
+.btn.small { padding: 6px 10px; font-size: 13px; border-radius: 9px; }
+
+.manual { display: flex; gap: 8px; margin-top: 4px; }
+.manual input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 11px 12px; }
+
+.status { margin-top: 12px; font-size: 13px; color: var(--muted); min-height: 1.4em; scroll-margin-top: 12px; }
+.status code { font-family: var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; color: var(--fg); }
+
+.results { display: grid; gap: 10px; margin-top: 8px; }
+.card { display: grid; grid-template-columns: 76px 1fr; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 10px; text-align: left; width: 100%; }
+.card img, .card .ph { width: 76px; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 6px; background: var(--line); }
+.card .ph { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--muted); font-family: var(--mono); font-size: 12px; text-align: center; overflow-wrap: anywhere; padding: 4px; }
+.card .ph b { color: var(--fg); font-size: 13px; }
+.card .meta { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.card .name { font-weight: 700; font-size: 16px; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.card .sub { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.lang-pill { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--fg); color: var(--bg); }
+.price { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; }
+.price.na { font-size: 14px; color: var(--muted); font-family: var(--font); font-weight: 500; }
+.price-src { font-size: 12px; margin-left: 6px; font-family: var(--font); font-weight: 500; color: var(--muted); }
+.pill { display: inline-block; font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.pill.saved { border-color: var(--good); color: var(--good); }
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; align-items: center; }
+
+/* 收藏 */
+.summary { display: flex; justify-content: space-between; align-items: center; margin: 4px 2px 12px; }
+.summary .total { font-family: var(--mono); font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.summary small { color: var(--muted); }
+.filters { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.filters::-webkit-scrollbar { display: none; }
+.fchip { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px; font-size: 14px; }
+.fchip b { font-family: var(--mono); font-weight: 500; font-size: 12px; color: var(--muted); margin-left: 4px; }
+.fchip[aria-selected="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.fchip[aria-selected="true"] b { color: var(--bg); opacity: .75; }
+.sortrow { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 10px 2px 0; font-size: 13px; color: var(--muted); }
+.sortrow select { border: 1px solid var(--line); background: var(--surface); border-radius: 9px; padding: 6px 8px; font-size: 13px; }
+.qty { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.qty button { border: 0; background: transparent; width: 34px; height: 30px; font-size: 18px; }
+.qty input { width: 40px; border: 0; border-inline: 1px solid var(--line); background: transparent; text-align: center; height: 30px; font-family: var(--mono); }
+.empty { text-align: center; color: var(--muted); padding: 40px 12px; border: 1px dashed var(--line); border-radius: 14px; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.confirm { display: flex; gap: 6px; align-items: center; font-size: 13px; flex-wrap: wrap; }
+
+nav.bottom { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line);
+  display: grid; grid-template-columns: 1fr 1fr; padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+nav.bottom button { border: 0; background: transparent; padding: 12px 0 14px; font-size: 14px; color: var(--muted); font-weight: 600; }
+nav.bottom button[aria-current="page"] { color: var(--fg); }
+nav.bottom button[aria-current="page"]::before { content: ""; display: block; width: 28px; height: 3px; border-radius: 3px; background: var(--accent); margin: -12px auto 9px; }
+
+.toast { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg);
+  padding: 9px 14px; border-radius: 10px; font-size: 13px; max-width: calc(100% - 32px); z-index: 10; }
+.settings { margin-top: 14px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.settings input { width: 70px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 5px 8px; font-family: var(--mono); }
+.field { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: var(--bg); width: 100%; min-width: 0; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1>PTCG 卡价扫描</h1>
+    <div class="seg" role="group" aria-label="显示货币" id="curSeg">
+      <button data-cur="USD">USD $</button>
+      <button data-cur="JPY">JPY ¥</button>
+      <button data-cur="CNY">CNY ¥</button>
+    </div>
+  </header>
+
+  <!-- 扫描页 -->
+  <section id="pageScan">
+    <div class="viewfinder idle" id="vf">
+      <video id="video" playsinline muted hidden></video>
+      <img id="preview" class="preview" alt="" hidden>
+      <div class="guide" id="guide" hidden></div>
+      <div class="vf-empty" id="vfEmpty">
+        <div>点「开始扫描」，把卡放进框里就会自动识别</div>
+        <small>日版 · 美版 · 简中 · 繁中 自动判断</small>
+      </div>
+    </div>
+
+    <button class="scanbtn" id="scanBtn">开始扫描</button>
+    <div class="linkrow">
+      <label class="linkbtn" for="pickIn">从相册选图</label>
+      <button class="linkbtn" id="manualToggle" aria-expanded="false" aria-controls="manualForm">手动输入</button>
+    </div>
+    <input type="file" id="shootIn" accept="image/*" capture="environment" hidden>
+    <input type="file" id="pickIn" accept="image/*" hidden>
+
+    <form class="manual" id="manualForm" hidden>
+      <input id="manualIn" placeholder="例：SV8a 236 / PAF 232 / CSV8C 100" autocomplete="off" aria-label="手动输入系列代码和编号">
+      <button class="btn" type="submit">查询</button>
+    </form>
+
+    <div class="status" id="status"></div>
+    <div class="results" id="results"></div>
+  </section>
+
+  <!-- 收藏页 -->
+  <section id="pageLib" hidden>
+    <div class="summary">
+      <div><div class="total" id="libTotal">$0.00</div><small id="libCount">0 张</small></div>
+      <button class="btn small" id="refreshBtn">刷新价格</button>
+    </div>
+    <div class="filters" role="tablist" aria-label="按版本筛选" id="libFilters"></div>
+    <div class="sortrow">
+      <label for="sortSel">排序</label>
+      <select id="sortSel">
+        <option value="price-desc">价格 高 → 低</option>
+        <option value="price-asc">价格 低 → 高</option>
+        <option value="set-new">版本 新 → 旧</option>
+        <option value="set-old">版本 旧 → 新</option>
+      </select>
+    </div>
+    <div class="results" id="libList"></div>
+    <div class="tools">
+      <button class="btn small" id="exportBtn">导出备份</button>
+      <label class="btn small" for="importIn">导入备份</label>
+      <input type="file" id="importIn" accept="application/json,.json" hidden>
+    </div>
+    <div class="settings">
+      <label for="thresholdIn">价格 ≥ $</label>
+      <input id="thresholdIn" type="number" min="0" step="0.5" inputmode="decimal">
+      <span>USD 的卡扫描后自动加入收藏</span>
+    </div>
+    <div class="settings" id="fxLine"></div>
+    <form class="settings" id="proxyForm">
+      <label for="proxyIn">价格服务器</label>
+      <input id="proxyIn" type="url" placeholder="https://xxx.workers.dev" style="flex:1;min-width:180px;width:auto" autocomplete="off">
+      <button class="btn small" type="submit">保存</button>
+      <span id="proxyState"></span>
+    </form>
+    <div class="settings" id="lastRefresh"></div>
+  </section>
+</div>
+
+<nav class="bottom">
+  <button id="navScan" aria-current="page">扫描</button>
+  <button id="navLib">收藏</button>
+</nav>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+"use strict";
+const API = "https://api.tcgdex.net/v2";
+const LANGS = { ja: "日版", en: "美版", "zh-cn": "简中", "zh-tw": "繁中" };
+const LANG_KEYS = Object.keys(LANGS);
+const REFRESH_MS = 60 * 60 * 1000; // 每小时刷新一次
+// 美版卡底印的系列简称 → TCGdex 系列 id（朱紫时代起卡上才印简称，更早的卡按「编号/总数」匹配）
+const EN_ABBR = { SVI: "sv01", SVE: "sve", SVP: "svp", PAL: "sv02", MCD23: "2023sv", OBF: "sv03", MEW: "sv03.5", MFB: "mfb",
+  PAR: "sv04", PAF: "sv04.5", TEF: "sv05", TWM: "sv06", SFA: "sv06.5", SCR: "sv07", SSP: "sv08", MCD24: "2024sv", PRE: "sv08.5",
+  JTG: "sv09", DRI: "sv10", BLK: "sv10.5b", WHT: "sv10.5w", MEE: "mee", MEG: "me01", MEP: "mep", PFL: "me02", ASC: "me02.5",
+  POR: "me03", CRI: "me04", PBL: "me05" };
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------- 存储 ----------
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+let lib = store.get("ptcg.lib", []);          // 收藏（价格统一按美元存）
+let threshold = store.get("ptcg.threshold", 5);
+let libFilter = store.get("ptcg.filter", "all");
+let libSort = store.get("ptcg.sort", "price-desc");
+const saveLib = () => store.set("ptcg.lib", lib);
+try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
+
+// ---------- 汇率与货币 ----------
+const CUR = { USD: { sym: "$", dec: 2 }, JPY: { sym: "JP¥", dec: 0 }, CNY: { sym: "CN¥", dec: 2 } };
+let cur = store.get("ptcg.cur", "USD");
+let fx = store.get("ptcg.fx3", { rates: { USD: 1, JPY: 150, CNY: 7.2 }, at: 0 });
+async function loadFx() {
+  if (Date.now() - fx.at < 12 * 3600e3) return renderFx();
+  try {
+    const j = await (await fetch("https://open.er-api.com/v6/latest/USD")).json();
+    if (j && j.rates && j.rates.JPY && j.rates.CNY) {
+      fx = { rates: { USD: 1, JPY: j.rates.JPY, CNY: j.rates.CNY }, at: Date.now() };
+      store.set("ptcg.fx3", fx);
+    }
+  } catch {}
+  renderFx();
+}
+const toUsd = (v) => v / fx.rates[cur];            // 当前货币 → 美元
+const fromUsd = (usd) => usd * fx.rates[cur];       // 美元 → 当前货币
+function fmt(usd) {
+  const c = CUR[cur];
+  return c.sym + fromUsd(usd).toLocaleString("en-US", { minimumFractionDigits: c.dec, maximumFractionDigits: c.dec });
+}
+function renderFx() {
+  document.querySelectorAll("#curSeg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.cur === cur)));
+  const r = fx.rates;
+  $("fxLine").textContent = `汇率：1 USD = JP¥${r.JPY.toFixed(2)} · CN¥${r.CNY.toFixed(3)}` +
+    (fx.at ? `（${new Date(fx.at).toLocaleDateString()} 更新）` : "（离线默认值）");
+  document.querySelectorAll("[data-usd]").forEach((e) => (e.textContent = fmt(+e.dataset.usd)));
+  if (!$("pageLib").hidden) renderLib();
+}
+document.querySelectorAll("#curSeg button").forEach((b) => {
+  b.onclick = () => { cur = b.dataset.cur; store.set("ptcg.cur", cur); renderFx(); };
+});
+
+// ---------- TCGdex 数据 ----------
+const mem = {};
+async function getJSON(url, cacheKey, ttl) {
+  if (cacheKey) {
+    if (mem[cacheKey] && Date.now() - mem[cacheKey].at < ttl) return mem[cacheKey].data;
+    const c = store.get("c." + cacheKey, null);
+    if (c && Date.now() - c.at < ttl) { mem[cacheKey] = c; return c.data; }
+  }
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const data = await r.json();
+  if (cacheKey) { const e = { at: Date.now(), data }; mem[cacheKey] = e; store.set("c." + cacheKey, e); }
+  return data;
+}
+const getSets = (l) => getJSON(`${API}/${l}/sets`, "sets." + l, 24 * 3600e3);
+async function getSet(l, id) {
+  const s = await getJSON(`${API}/${l}/sets/${encodeURIComponent(id)}`, null);
+  // 只缓存需要的字段，减小体积
+  return { id: s.id, name: s.name, abbr: s.abbreviation && s.abbreviation.official, official: s.cardCount && s.cardCount.official,
+    rel: s.releaseDate || null, cards: (s.cards || []).map((c) => [c.id, c.localId, c.name, c.image || ""]) };
+}
+const setCache = {};
+async function getSetCached(l, id) {
+  const k = l + "/" + id;
+  if (setCache[k]) return setCache[k];
+  const c = store.get("s2." + k, null);
+  if (c && Date.now() - c.at < 7 * 86400e3) return (setCache[k] = c.data);
+  const d = await getSet(l, id); setCache[k] = d; store.set("s2." + k, { at: Date.now(), data: d }); return d;
+}
+const getCard = (l, id) => getJSON(`${API}/${l}/cards/${encodeURIComponent(id)}`, null);
+
+// 四种语言的系列索引（代码大写 → 系列）
+let setIdx = null;
+async function getIndex() {
+  if (setIdx) return setIdx;
+  const lists = await Promise.all(LANG_KEYS.map((l) => getSets(l).catch(() => null)));
+  const idx = {};
+  LANG_KEYS.forEach((l, i) => {
+    // 简中库里混有繁中数据，只认 C 开头的简中商品编号
+    const list = (lists[i] || []).filter((s) => l !== "zh-cn" || /^C/i.test(s.id));
+    idx[l] = { list, map: new Map(list.map((s) => [String(s.id).toUpperCase(), s])) };
+  });
+  if (lists.every(Boolean)) setIdx = idx;
+  return idx;
+}
+
+// ---------- 价格：TCGplayer 市价（美元） ----------
+// 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
+function proxyUrl() {
+  const s = store.get("ptcg.proxy", "");
+  if (s) return s.replace(/\/+$/, "");
+  if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return location.origin + "/tcgp";
+  return "";
+}
+async function tcgSearch(q, line) {
+  const base = proxyUrl();
+  if (!base) return null;
+  const j = await getJSON(`${base}?q=${encodeURIComponent(q)}&line=${line}`, `tp.${line}.${q.toLowerCase()}`, 30 * 60e3);
+  return j.items || [];
+}
+// x 需要：lang、setRef/setId、abbr、localId、official、name、setName
+async function tcgPrice(x) {
+  const line = x.lang === "en" ? "pokemon" : "pokemon-japan";
+  // 直接从 TCGplayer 找到的卡（复刻卡等）：按印刷编号重新查同一个商品
+  if (x.tpOnly && x.tpId) {
+    const n = parseInt(x.localId, 10);
+    let p = null;
+    for (const q of numVariants(n, x.official)) {
+      const items = await tcgSearch(q, line);
+      if (!items) return null;
+      p = items.find((i) => i.id === x.tpId);
+      if (p) break;
+    }
+    return p ? { usd: p.price, tpId: p.id, src: "TCGplayer", detail: `市价 · ${p.rarity || p.set}` } : { usd: null, tpId: x.tpId, src: "", detail: "" };
+  }
+  const code = String(x.setRef || x.setId || "");
+  const n = parseInt(x.localId, 10);
+  const numStr = x.official ? `${x.localId}/${String(x.official).padStart(String(x.localId).length, "0")}` : String(x.localId);
+  const queries = x.lang === "en" ? [`${x.name} ${numStr}`] : [`${code} ${x.localId}`, `${code} ${numStr}`];
+  for (const q of queries) {
+    const items = await tcgSearch(q, line);
+    if (!items) return null;
+    const sameNum = items.filter((p) => parseInt(String(p.number).split("/")[0], 10) === n);
+    const setOk = (p) => {
+      const s = String(p.set || "").toLowerCase();
+      if (x.lang === "en") return s.includes(String(x.setName || "").toLowerCase()) || (x.abbr && s.includes(x.abbr.toLowerCase()));
+      return s.startsWith(code.toLowerCase() + ":") || s.startsWith(code.toLowerCase() + " ");
+    };
+    const p = sameNum.find(setOk) || (sameNum.length === 1 ? sameNum[0] : null);
+    if (p) return { usd: p.price, tpId: p.id, src: "TCGplayer", detail: p.price != null ? `市价 · ${p.rarity || p.set}` : "暂无成交价" };
+  }
+  return { usd: null, tpId: null, src: "", detail: "" };
+}
+
+// 根据语言取价格：繁中用同编号的日版卡价格作参考，简中暂无数据源
+// 没有价格中转时，美版退回 TCGdex 里附带的 TCGplayer 价格
+async function priceFor(x) {
+  if (x.lang === "zh-cn") return null;
+  try {
+    const p = await tcgPrice(x.lang === "zh-tw" ? { ...x, lang: "ja" } : x);
+    if (p && (p.usd != null || p.tpId)) {
+      if (x.lang === "zh-tw") p.src += " · 参考日版";
+      return p.usd != null ? p : { ...p, usd: null };
+    }
+  } catch {}
+  if (x.lang === "en") {
+    try {
+      const tp = (await getCard("en", x.id)).pricing?.tcgplayer;
+      if (tp) for (const k of ["holofoil", "normal", "reverse-holofoil", ...Object.keys(tp)]) {
+        const v = tp[k] && (tp[k].marketPrice || tp[k].midPrice);
+        if (v) return { usd: v, src: "TCGplayer", detail: "市价（TCGdex 转载）" };
+      }
+    } catch {}
+  }
+  return null;
+}
+
+// 卡图：先用 TCGdex，没有就用 Limitless TCG 的图（新系列编号不补零，老系列补到三位，两种都试），都没有就显示占位卡
+const LIMITLESS = "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com";
+function imgSources(x) {
+  const out = [];
+  if (x.tpId) out.push(`https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_200w.jpg`);
+  if (x.image) out.push(x.image + "/low.webp");
+  const n = parseInt(x.localId, 10);
+  if (!isNaN(n)) {
+    const nums = [...new Set([String(n), String(n).padStart(3, "0")])];
+    if (x.lang === "ja" || x.lang === "zh-tw") {
+      const s = x.setRef || x.setId;
+      nums.forEach((k) => out.push(`${LIMITLESS}/tpc/${s}/${s}_${k}_R_JP_SM.png`));
+    } else if (x.lang === "en") {
+      const a = x.abbr || x.setId;
+      if (a && /^[A-Z0-9]{2,5}$/.test(a)) nums.forEach((k) => out.push(`${LIMITLESS}/tpci/${a}/${a}_${k}_R_EN_SM.png`));
+    }
+  }
+  return out;
+}
+function cardImg(x) {
+  const srcs = imgSources(x);
+  const ph = () => {
+    const d = document.createElement("div"); d.className = "ph";
+    d.innerHTML = `<b>${esc(x.setId || "")}</b><span>${esc(x.localId || "")}</span>`;
+    return d;
+  };
+  if (!srcs.length) return ph();
+  const img = document.createElement("img"); img.alt = ""; img.loading = "lazy";
+  let i = 0;
+  img.onerror = () => { i++; if (i < srcs.length) img.src = srcs[i]; else img.replaceWith(ph()); };
+  img.src = srcs[0];
+  return img;
+}
+
+// ---------- OCR ----------
+let worker = null, workerLoading = null;
+function getWorker() {
+  if (worker) return Promise.resolve(worker);
+  if (workerLoading) return workerLoading;
+  setStatus("首次使用要加载识别引擎（约 3MB），请稍等…");
+  workerLoading = (async () => {
+    const w = await Tesseract.createWorker("eng", 1, {});
+    await w.setParameters({
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/-. ",
+      tessedit_pageseg_mode: "11",
+    });
+    worker = w;
+    return w;
+  })();
+  workerLoading.catch(() => { workerLoading = null; });
+  return workerLoading;
+}
+
+// 预处理：以区域中心旋转（纠正卡片歪斜）、缩放、灰度、按百分位拉伸对比度（压掉反光和暗角）
+// adaptive=true 时再做局部二值化，对付一边亮一边暗的反光
+function prep(src, sx, sy, sw, sh, opt = {}) {
+  const target = opt.target || 1400, angle = ((opt.angle || 0) * Math.PI) / 180;
+  const scale = Math.max(0.4, Math.min(3, target / sw));
+  const W = Math.round(sw * scale), H = Math.round(sh * scale);
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.fillStyle = "#808080"; g.fillRect(0, 0, W, H);
+  g.imageSmoothingQuality = "high";
+  g.translate(W / 2, H / 2); g.rotate(-angle); g.scale(scale, scale); g.translate(-(sx + sw / 2), -(sy + sh / 2));
+  g.drawImage(src, 0, 0);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  const d = g.getImageData(0, 0, W, H), p = d.data, n = W * H;
+  const lum = new Uint8ClampedArray(n), hist = new Uint32Array(256);
+  for (let i = 0, j = 0; j < n; i += 4, j++) { const y = (0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2]) | 0; lum[j] = y; hist[y]++; }
+  let lo = 0, hi = 255, acc = 0;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > n * 0.01) { lo = v; break; } }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > n * 0.01) { hi = v; break; } }
+  const span = Math.max(1, hi - lo);
+  for (let j = 0; j < n; j++) lum[j] = ((lum[j] - lo) * 255) / span;
+  if (opt.adaptive) {
+    // 积分图求局部均值，比均值暗一截的算文字
+    const ii = new Float64Array((W + 1) * (H + 1));
+    for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { row += lum[y * W + x]; ii[(y + 1) * (W + 1) + x + 1] = ii[y * (W + 1) + x + 1] + row; } }
+    const r = Math.max(8, Math.round(H / 6)), out = new Uint8ClampedArray(n);
+    for (let y = 0; y < H; y++) {
+      const y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1);
+      for (let x = 0; x < W; x++) {
+        const x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1);
+        const sum = ii[y1 * (W + 1) + x1] - ii[y0 * (W + 1) + x1] - ii[y1 * (W + 1) + x0] + ii[y0 * (W + 1) + x0];
+        out[y * W + x] = lum[y * W + x] < (sum / ((x1 - x0) * (y1 - y0))) * 0.88 ? 0 : 255;
+      }
+    }
+    lum.set(out);
+  }
+  for (let i = 0, j = 0; j < n; i += 4, j++) p[i] = p[i + 1] = p[i + 2] = lum[j];
+  g.putImageData(d, 0, 0);
+  c._map = { s: scale, a: angle, cx: sx + sw / 2, cy: sy + sh / 2, W, H }; // 用来把识别到的位置换算回原图
+  return c;
+}
+// 处理后画布上的点 → 原图坐标
+function canvasToSrc(c, px, py) {
+  const m = c._map, dx = (px - m.W / 2) / m.s, dy = (py - m.H / 2) / m.s, ca = Math.cos(m.a), sa = Math.sin(m.a);
+  return [m.cx + dx * ca - dy * sa, m.cy + dx * sa + dy * ca];
+}
+
+// ---------- 图片比对：把卡面缩成小色块图，和候选卡官方图比相似度 ----------
+const SIG_W = 18, SIG_H = 25;
+// 以 (cx, cy) 为中心、w×h 大小、倾斜 angleDeg 的区域 → 归一化后的颜色向量（不怕整体偏暗偏亮）
+let sigCanvases = null;
+function sigFrom(src, cx, cy, w, h, angleDeg = 0) {
+  if (!sigCanvases) {
+    const mid = document.createElement("canvas"); mid.width = SIG_W * 5; mid.height = SIG_H * 5;
+    const c = document.createElement("canvas"); c.width = SIG_W; c.height = SIG_H;
+    sigCanvases = { mid, gm: mid.getContext("2d"), g: c.getContext("2d", { willReadFrequently: true }) };
+  }
+  const { mid, gm, g } = sigCanvases;
+  gm.setTransform(1, 0, 0, 1, 0, 0); gm.fillStyle = "#808080"; gm.fillRect(0, 0, mid.width, mid.height);
+  gm.imageSmoothingQuality = "high";
+  gm.translate(mid.width / 2, mid.height / 2); gm.rotate((-angleDeg * Math.PI) / 180); gm.scale(mid.width / w, mid.height / h); gm.translate(-cx, -cy);
+  gm.drawImage(src, 0, 0);
+  g.imageSmoothingQuality = "high";
+  g.drawImage(mid, 0, 0, SIG_W, SIG_H);
+  const p = g.getImageData(0, 0, SIG_W, SIG_H).data, n = SIG_W * SIG_H, v = new Float32Array(n * 3);
+  for (let ch = 0; ch < 3; ch++) {
+    let m = 0; for (let j = 0; j < n; j++) m += p[j * 4 + ch]; m /= n;
+    let s = 0; for (let j = 0; j < n; j++) { const d = p[j * 4 + ch] - m; v[ch * n + j] = d; s += d * d; }
+    s = Math.sqrt(s / n) || 1; for (let j = 0; j < n; j++) v[ch * n + j] /= s;
+  }
+  return v;
+}
+const simOf = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) d += a[i] * b[i]; return d / a.length; };
+// 加个参数单独下载：页面上显示过的同一张图是普通缓存，不能读像素
+const loadImg = (u) => new Promise((res, rej) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => res(i); i.onerror = rej; i.src = u + (u.includes("?") ? "&" : "?") + "px=1"; });
+const refCache = new Map();
+function refSig(c) {
+  const key = c.lang + ":" + c.id;
+  if (!refCache.has(key)) refCache.set(key, (async () => {
+    if (!c.tpId && c.lang !== "zh-cn") { try { const p = await priceFor(c); if (p && p.tpId) c.tpId = p.tpId; } catch {} }
+    const urls = [];
+    if (c.tpId) urls.push(`https://tcgplayer-cdn.tcgplayer.com/product/${c.tpId}_200w.jpg`);
+    if (c.image) urls.push(c.image + "/low.webp");
+    for (const u of urls) {
+      try { const im = await loadImg(u); return sigFrom(im, im.naturalWidth / 2, im.naturalHeight / 2, im.naturalWidth * 0.98, im.naturalHeight * 0.98); } catch {}
+    }
+    return null;
+  })());
+  return refCache.get(key);
+}
+// 相机：卡就在引导框里，上下左右各挪一点、放大缩小一点都试
+function liveCardSigs() {
+  const v = $("video"), vf = $("vf"), g = $("guide");
+  const vw = v.videoWidth, vh = v.videoHeight; if (!vw) return [];
+  const box = vf.getBoundingClientRect(), gb = g.getBoundingClientRect();
+  const s = Math.max(box.width / vw, box.height / vh), ox = (vw * s - box.width) / 2, oy = (vh * s - box.height) / 2;
+  const gx = (gb.left - box.left + ox) / s, gy = (gb.top - box.top + oy) / s, gw = gb.width / s, gh = gb.height / s;
+  const out = [];
+  for (const sc of [0.94, 1, 1.06]) for (const dx of [-0.04, 0, 0.04]) for (const dy of [-0.04, 0, 0.04])
+    out.push(sigFrom(v, gx + gw * (0.5 + dx), gy + gh * (0.5 + dy), gw * 0.98 * sc, gh * 0.98 * sc));
+  return out;
+}
+// 照片：用编号的位置和宽度推算整张卡在哪（编号宽约卡宽 9.5%，在卡左起 11~20%、高度 96% 处），附近多试几个位置
+function photoCardSigs(img, canvas, words) {
+  const nw = words.find((wd) => /\d{1,3}\s*\/\s*\d{2,3}/.test(wd.text));
+  if (!nw || !canvas._map) return [];
+  const { x0, y1, x1 } = nw.bbox, m = canvas._map;
+  const [lx, by] = canvasToSrc(canvas, x0, y1);
+  const numW = (x1 - x0) / m.s, ca = Math.cos(m.a), sa = Math.sin(m.a), deg = (m.a * 180) / Math.PI;
+  const out = [];
+  for (const leftR of [0.115, 0.2]) for (const sc of [0.85, 1, 1.15]) {
+    const cw = (numW / 0.095) * sc, ch = (cw * 88) / 63;
+    for (const jx of [-0.04, 0, 0.04]) for (const jy of [-0.03, 0, 0.03]) {
+      const dx = (0.5 - leftR + jx) * cw, dy = (0.5 - 0.96 + jy) * ch;
+      out.push(sigFrom(img, lx + dx * ca - dy * sa, by + dx * sa + dy * ca, cw * 0.98, ch * 0.98, deg));
+    }
+  }
+  return out;
+}
+// 分不清时让用户选：按卡图相似度排好，明显不像的不列出来
+async function orderByImage(cands, sigs) {
+  if (cands.length < 2 || !sigs.length) return cands;
+  const scored = [];
+  for (const c of cands.slice(0, 10)) { c._sim = await imageSim(c, sigs); scored.push(c); }
+  const top = Math.max(...scored.map((c) => (c._sim == null ? -1 : c._sim)));
+  return scored
+    .filter((c) => c._sim == null || top < 0.4 || c._sim >= top - 0.25)
+    .sort((a, b) => (b._sim ?? -1) - (a._sim ?? -1));
+}
+
+// 文字证据不够强（没对上系列代码，只靠编号）的结果，要再看卡图像不像
+const weakEvidence = (c) => c.tpOnly || (c.score || 0) < 3;
+async function imageSim(c, sigs) {
+  const r = await refSig(c);
+  return r && sigs.length ? Math.max(...sigs.map((q) => simOf(q, r))) : null;
+}
+
+// 照片：不管卡在哪、编号印在哪，把照片缩小后用不同大小的卡片框整张滑一遍
+function slideSigs(img, angleDeg = 0) {
+  const W = 300, H = Math.round((img.naturalHeight / img.naturalWidth) * W);
+  const small = document.createElement("canvas"); small.width = W; small.height = H;
+  const gs = small.getContext("2d"); gs.imageSmoothingQuality = "high"; gs.drawImage(img, 0, 0, W, H);
+  const out = [];
+  for (let fw = 0.35; fw <= 0.97; fw += 0.05) {
+    const cw = fw * W, ch = (cw * 88) / 63;
+    if (ch > H * 1.02) continue;
+    const step = cw * 0.07;
+    for (let cy = ch / 2; cy <= H - ch / 2 + 0.5; cy += step)
+      for (let cx = cw / 2; cx <= W - cw / 2 + 0.5; cx += step) out.push(sigFrom(small, cx, cy, cw * 0.98, ch * 0.98, angleDeg));
+  }
+  return out;
+}
+
+// 候选卡按图片相似度重新排；第一名明显领先才采用
+async function imageRerank(cands, querySigs) {
+  if (cands.length < 2 || !querySigs.length) return null;
+  const scored = [];
+  for (const c of cands.slice(0, 8)) {
+    const ref = await refSig(c);
+    if (ref) scored.push({ c, s: Math.max(...querySigs.map((q) => simOf(q, ref))) });
+  }
+  scored.sort((a, b) => b.s - a.s);
+  // 日版和繁中同一张卡用的是同一张图，算一组；和「别的卡」比领先多少
+  const same = (x) => x.c.lang !== "en" && scored[0].c.lang !== "en" && String(x.c.setId).toUpperCase() === String(scored[0].c.setId).toUpperCase() && x.c.localId === scored[0].c.localId;
+  const rival = scored.find((x) => !same(x));
+  const ok = scored.length >= 2 && scored[0].s >= 0.3 && (!rival || scored[0].s - rival.s >= 0.06);
+  const pick = ok ? (scored.filter(same).find((x) => x.c.lang === "ja") || scored[0]).c : null;
+  return { pick, sim: scored[0] ? scored[0].s : 0, scores: scored };
+}
+
+async function ocr(canvas) {
+  return (await ocrWords(canvas)).text;
+}
+// 同时返回每个词的位置，用来定位编号
+async function ocrWords(canvas) {
+  const w = await getWorker();
+  const { data } = await w.recognize(canvas, {}, { text: true, blocks: true });
+  const words = [];
+  for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || []) for (const wd of l.words || []) words.push(wd);
+  return { text: data.text || "", words };
+}
+
+// 系列代码常常印在小框里（比如 m1L），整条识别时容易被漏掉：
+// 截取编号左边那一块，去掉框线、放大，再按单行单独识别一次
+async function readCodeLeftOf(canvas, words) {
+  const numWord = words.find((wd) => /\d{1,3}\s*\/\s*\d{2,3}/.test(wd.text));
+  if (!numWord) return [];
+  const { x0, y0, x1, y1 } = numWord.bbox, h = y1 - y0, nw = x1 - x0;
+  const cx0 = Math.max(0, Math.round(x0 - Math.max(nw * 1.3, h * 4.5))), cx1 = Math.round(x0 - h * 0.1);
+  const cy0 = Math.max(0, Math.round(y0 - h * 0.7)), cy1 = Math.min(canvas.height, Math.round(y1 + h * 0.7));
+  if (cx1 - cx0 < h || cy1 - cy0 < 4) return [];
+  const S = 2, W = (cx1 - cx0) * S, H = (cy1 - cy0) * S;
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.imageSmoothingQuality = "high";
+  g.drawImage(canvas, cx0, cy0, cx1 - cx0, cy1 - cy0, 0, 0, W, H);
+  const d = g.getImageData(0, 0, W, H), p = d.data;
+  let sum = 0; for (let i = 0; i < p.length; i += 4) sum += p[i];
+  const thr = (sum / (W * H)) * 0.8;
+  const dark = new Uint8Array(W * H);
+  for (let j = 0; j < W * H; j++) dark[j] = p[j * 4] < thr ? 1 : 0;
+  // 去框线：横向黑色连续长度超过字高 2 倍、纵向超过字高 1.3 倍的，都当成线抹掉
+  const th = h * S, kill = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) { let run = 0; for (let x = 0; x <= W; x++) { if (x < W && dark[y * W + x]) run++; else { if (run > th * 2) for (let k = x - run; k < x; k++) kill[y * W + k] = 1; run = 0; } } }
+  for (let x = 0; x < W; x++) { let run = 0; for (let y = 0; y <= H; y++) { if (y < H && dark[y * W + x]) run++; else { if (run > th * 1.3) for (let k = y - run; k < y; k++) kill[k * W + x] = 1; run = 0; } } }
+  for (let j = 0; j < W * H; j++) { const v = dark[j] && !kill[j] ? 0 : 255; p[j * 4] = p[j * 4 + 1] = p[j * 4 + 2] = v; }
+  g.putImageData(d, 0, 0);
+  const w = await getWorker();
+  await w.setParameters({ tessedit_pageseg_mode: "7" });
+  let text = "";
+  try { text = (await w.recognize(c)).data.text || ""; } finally { await w.setParameters({ tessedit_pageseg_mode: "11" }); }
+  return text.toUpperCase().split(/[\s\/]+/).map((s) => s.replace(/[^A-Z0-9.\-]/g, "")).filter((s) => s.length >= 2);
+}
+
+// 按字形算的编辑距离：1/I/L/T、0/O/D、5/S 这类容易认错的字只算「半个错」
+const LOOKALIKE = ["1ILTJ", "0ODQ", "5S", "8B", "2Z", "6G", "4A"];
+const subCost = (a, b) => (a === b ? 0 : LOOKALIKE.some((g) => g.includes(a) && g.includes(b)) ? 0.4 : 1);
+function wlev(a, b) {
+  const d = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0]; d[0] = i;
+    for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + subCost(a[i - 1], b[j - 1])); prev = t; }
+  }
+  return d[b.length];
+}
+const NOT_CODE = new Set(["AR", "SAR", "SR", "UR", "RR", "RRR", "CHR", "CSR", "ACE", "HR", "EN", "MA", "BWR", "ILLUS"]);
+const isCodeVote = (t) => t.length >= 2 && t.length <= 7 && /[A-Z]/.test(t) && !NOT_CODE.has(t);
+// 多次读到的代码一起投票，看哪个候选系列明显得票最多
+function voteResolve(cands, votes) {
+  const sets = [...new Set(cands.map((c) => String(c.setId).toUpperCase()))];
+  if (sets.length < 2 || !votes.length) return null;
+  const sc = sets.map((s) => ({ s, v: votes.reduce((a, t) => a + Math.max(0, 2 - wlev(t, s)), 0) })).sort((a, b) => b.v - a.v);
+  if (sc[0].v >= 2.5 && sc[0].v - sc[1].v >= 1) {
+    const win = cands.filter((c) => String(c.setId).toUpperCase() === sc[0].s);
+    return win.length === 1 ? win : null;
+  }
+  return null;
+}
+
+// 结果不确定（多张候选、没对上代码）时，补读代码再判断；votes 跨多次尝试累积
+const confident = (cands) => cands.length === 1;
+async function refineWithCode(canvas, words, parsed, votes = []) {
+  const cands = await identify(parsed);
+  if (confident(cands)) return { parsed, cands };
+  const extra = await readCodeLeftOf(canvas, words);
+  votes.push(...extra.filter(isCodeVote), ...parsed.tokens.filter(isCodeVote));
+  let best = { parsed, cands };
+  if (extra.length) {
+    const p2 = { ...parsed, tokens: extra.concat(parsed.tokens.filter((t) => !extra.includes(t))) };
+    const c2 = await identify(p2);
+    if (confident(c2)) return { parsed: p2, cands: c2 };
+    if (!cands.length) best = { parsed: p2, cands: c2 };
+  }
+  const pick = voteResolve(best.cands, votes);
+  // 投票选出来的不算十拿九稳，带上全部候选，后面再用卡图核对
+  return pick ? { parsed: best.parsed, cands: pick, viaVote: true, all: best.cands } : best;
+}
+
+// ---------- 解析卡底文字 ----------
+// 卡底例子：日版「H SV8a 236/187 SAR」 繁中「H SV8a F 236/187」 美版「H PAF EN 232/091」 简中「CSV8C 100/207」
+function parseText(text, manual) {
+  // 代码外框、竖线之类当作空格
+  const t = text.replace(/[|\\[\](){}<>]/g, " ").replace(/\s+/g, " ").trim();
+  const fix = (s) => s.replace(/[Oo]/g, "0").replace(/[lI]/g, "1");
+  const nums = [];
+  let m;
+  const re = /(^|[^A-Za-z0-9])([0-9OolI]{1,3})\s*\/\s*([0-9OolI]{2,3})(?![0-9])/g;
+  while ((m = re.exec(t))) nums.push({ n: parseInt(fix(m[2]), 10), total: parseInt(fix(m[3]), 10) });
+  const rp = /(\d{1,3})\s*\/\s*([A-Za-z]{1,3}-P)\b/g;             // 日版特典卡：001/SV-P
+  while ((m = rp.exec(t))) nums.push({ n: parseInt(m[1], 10), total: null, promo: m[2].toUpperCase() });
+  const re2 = /\b([A-Za-z]{3})\s*EN\s*(\d{3})(?!\s*\/)/g;          // 美版特典卡：SVP EN 001
+  while ((m = re2.exec(t))) nums.push({ n: parseInt(m[2], 10), total: null });
+  const tokens = t.toUpperCase().split(/[\s\/]+/).map((s) => s.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, "")).filter(Boolean);
+  if (manual && !nums.length) {
+    const mm = t.match(/(?:^|\s)(\d{1,3})\s*$/);                   // 手动输入：SV8a 236
+    if (mm) nums.push({ n: parseInt(mm[1], 10), total: null });
+  }
+  // 繁中：系列代码后面跟一个单独的 F（注意：代码前面的 F 是赛制标记，不算）
+  const twPrev = [];
+  tokens.forEach((s, i) => { if (s === "F" && i > 0) twPrev.push(tokens[i - 1]); });
+  return { nums, tokens, twPrev, en: tokens.includes("EN"), raw: t };
+}
+
+// 编辑距离：代码读错一两个字时用来找最接近的系列
+function lev(a, b) {
+  const d = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0]; d[0] = i;
+    for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = t; }
+  }
+  return d[b.length];
+}
+function nearestSet(list, U, parsed) {
+  const totals = parsed.nums.map((x) => x.total).filter(Boolean);
+  let best = null, bestScore = Infinity;
+  for (const s of list) {
+    const dist = lev(U, String(s.id).toUpperCase());
+    if (dist > 2) continue;
+    const score = dist - (s.cardCount && totals.includes(s.cardCount.official) ? 1.5 : 0);
+    if (score < bestScore) { best = s; bestScore = score; }
+  }
+  return best;
+}
+
+// ---------- 识别是哪张卡、哪种语言 ----------
+async function identify(parsed) {
+  const idx = await getIndex();
+  const hits = [];
+  const addHit = (lang, set, score) => {
+    if (!set) return;
+    const h = hits.find((x) => x.lang === lang && x.set.id === set.id);
+    if (h) h.score = Math.max(h.score, score); else hits.push({ lang, set, score });
+  };
+  const inJaTw = (u) => idx.ja.map.has(u) || idx["zh-tw"].map.has(u);
+  const tw = parsed.twPrev.some(inJaTw);
+  const codeTokens = parsed.tokens.filter((s) => /[A-Z]/.test(s) && s.length >= 2 && s !== "EN");
+  const totals = parsed.nums.map((x) => x.total).filter(Boolean);
+  for (const U of codeTokens) {
+    // 美版：系列简称 + EN
+    const enKey = EN_ABBR[U] ? U : (U.length > 4 && U.endsWith("EN") && EN_ABBR[U.slice(0, -2)] ? U.slice(0, -2) : null);
+    if (enKey && (parsed.en || enKey !== U)) addHit("en", idx.en.map.get(EN_ABBR[enKey].toUpperCase()), 3);
+    // 简中：C 开头 C 结尾的商品编号
+    if (/^C[A-Z0-9.]{2,}C$/.test(U)) addHit("zh-cn", idx["zh-cn"].map.get(U) || nearestSet(idx["zh-cn"].list, U, parsed) || { id: U, name: "" }, 3);
+    // 日版 / 繁中：代码相同，繁中多一个 F
+    let base = U, glued = false;
+    if (!inJaTw(U) && U.endsWith("F") && inJaTw(U.slice(0, -1))) { base = U.slice(0, -1); glued = true; }
+    if (inJaTw(base)) {
+      const jaS = idx.ja.map.get(base), twS = idx["zh-tw"].map.get(base);
+      if (tw || glued) addHit("zh-tw", twS || jaS, 3);
+      else if (!parsed.en) addHit(jaS ? "ja" : "zh-tw", jaS || twS, 2);
+    }
+  }
+  // 代码读错一个字（比如 M1L 读成 MIL）：编号总数对得上的日版 / 繁中系列
+  if (!hits.length && !parsed.en && totals.length) {
+    for (const U of codeTokens) {
+      for (const s of idx.ja.list) {
+        if (!(s.cardCount && totals.includes(s.cardCount.official))) continue;
+        const id = String(s.id).toUpperCase();
+        const d = wlev(U, id), dF = U.endsWith("F") ? wlev(U.slice(0, -1), id) : 9;
+        if (Math.min(d, dF) > 1) continue;
+        const isTw = dF < d || parsed.twPrev.some((p) => wlev(p, id) <= 1);
+        // 只差一个形近字（1/I/L）算比较可信，否则分数低一些，留给多次投票决定
+        addHit(isTw ? "zh-tw" : "ja", isTw ? idx["zh-tw"].map.get(id) || s : s, Math.min(d, dF) <= 0.4 ? 2 : 1.5);
+      }
+    }
+  }
+  // 卡上没有系列代码（老卡、Classic Collection 这类复刻卡）：
+  // TCGplayer 按卡面印的编号记录，复刻卡也查得到。复刻卡连版权年份都照抄原版，只能靠卡图（边框颜色等）区分
+  let tpCands = [];
+  if (!hits.length && proxyUrl() && totals.length) tpCands = await tcgNumberCandidates(parsed);
+  // 再按「编号/总数」在 TCGdex 各语言里找（美版已经由 TCGplayer 找过就跳过），两边候选合在一起
+  if (!hits.length) {
+    const hasCode = codeTokens.some((s) => /\d/.test(s));
+    let order = parsed.en ? ["en"] : hasCode ? ["ja", "zh-tw", "en"] : ["en", "ja", "zh-tw"];
+    if (tpCands.length) order = order.filter((l) => l !== "en");
+    for (const total of totals) {
+      for (const l of order) idx[l].list.filter((s) => s.cardCount && s.cardCount.official === total).slice(-6).reverse().forEach((s) => addHit(l, s, 1));
+    }
+  }
+  hits.sort((a, b) => b.score - a.score);
+  const out = [];
+  for (const h of hits.slice(0, 12)) {
+    for (const num of parsed.nums) {
+      if (num.promo && String(h.set.id).toUpperCase() !== num.promo) continue;
+      const c = await candidate(h.lang, h.set, num);
+      if (!c) continue;
+      const off = h.set.cardCount && h.set.cardCount.official;
+      c.score = h.score + (num.total && off ? (off === num.total ? 1 : -1) : 0);
+      if (!out.some((x) => x.lang === c.lang && x.id === c.id)) out.push(c);
+    }
+  }
+  out.push(...tpCands);
+  out.sort((a, b) => b.score - a.score);
+  if (!out.length) return out;
+  const top = out[0].score;
+  return top >= 3 ? out.filter((c) => c.score === top) : out.slice(0, 10);
+}
+
+// 用 TCGplayer 按印刷编号找美版卡（老卡、复刻卡卡面没有系列代码）
+const numVariants = (n, total) => [...new Set([`${n}/${total}`, `${String(n).padStart(3, "0")}/${total}`, `${String(n).padStart(3, "0")}/${String(total).padStart(3, "0")}`])];
+async function tcgNumberCandidates(parsed) {
+  const out = [];
+  for (const { n, total } of parsed.nums) {
+    if (!total) continue;
+    // 有的记成 4/102，有的记成 004/102（比如 Base Set 原版），几种写法都搜
+    let items = [];
+    for (const q of numVariants(n, total)) {
+      try { items = items.concat((await tcgSearch(q, "pokemon")) || []); } catch {}
+    }
+    for (const p of items) {
+      const [a, b] = String(p.number).split("/").map((s) => parseInt(s, 10));
+      if (a !== n || b !== total || /jumbo/i.test(p.set) || out.some((x) => x.tpId === p.id)) continue; // 巨型卡不算
+      out.push({ lang: "en", tpOnly: true, tpId: p.id, id: "tp" + p.id,
+        name: String(p.name).replace(/\s*-\s*\d+\/\d+.*$/, ""), setName: p.set, setId: "", localId: String(n), official: total,
+        rel: p.rel || null, tpPrice: p.price, score: 2 });
+    }
+  }
+  return out;
+}
+// 在某个系列里找第 n 张卡
+async function candidate(lang, set, num) {
+  const n = num.n;
+  if (lang === "zh-cn") {
+    let det = null;
+    try { det = await getSetCached("zh-cn", set.id); } catch {}
+    const card = det && det.cards.find((c) => parseInt(c[1], 10) === n);
+    if (card) return { lang, id: card[0], localId: card[1], name: card[2], image: card[3], setId: det.id, setName: det.name, official: det.official, rel: det.rel };
+    const lid = String(n).padStart(3, "0");
+    return { lang, manual: true, id: `${set.id}-${lid}`, localId: lid, name: "", setId: set.id,
+      setName: (det && det.name) || set.name || "", official: num.total || (det && det.official) || null, rel: det && det.rel };
+  }
+  // 繁中库里没有的系列，用同代码的日版资料
+  const idx = await getIndex();
+  const dataLang = lang === "zh-tw" && !idx["zh-tw"].map.has(String(set.id).toUpperCase()) ? "ja" : lang;
+  let det;
+  try { det = await getSetCached(dataLang, set.id); } catch { return null; }
+  const card = det.cards.find((c) => parseInt(c[1], 10) === n);
+  if (!card) return null;
+  const c = { lang, id: card[0], localId: card[1], name: card[2], image: card[3], setId: det.id, setName: det.name, abbr: det.abbr, official: det.official, rel: det.rel };
+  if ((!c.image || !c.rel) && lang === "zh-tw") {
+    try {
+      const jd = await getSetCached("ja", set.id);
+      const jc = jd.cards.find((x) => parseInt(x[1], 10) === n);
+      if (jc && !c.image) c.image = jc[3];
+      c.rel = c.rel || jd.rel;
+    } catch {}
+  }
+  return c;
+}
+
+// 日版 ↔ 繁中 互换（F 没读到时可以手动纠正）
+async function counterpart(c) {
+  if (c.lang !== "ja" && c.lang !== "zh-tw") return null;
+  const other = c.lang === "ja" ? "zh-tw" : "ja";
+  const idx = await getIndex();
+  const U = String(c.setId).toUpperCase();
+  const s = idx[other].map.get(U) || (other === "zh-tw" ? idx.ja.map.get(U) : null);
+  if (!s) return null;
+  return candidate(other, s, { n: parseInt(c.localId, 10), total: c.official });
+}
+
+// ---------- 结果 ----------
+function setStatus(html) { $("status").innerHTML = html; }
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.h); toast.h = setTimeout(() => (t.hidden = true), 2200);
+}
+const keyOf = (l, id) => l + ":" + id;
+const numTail = (c) => (c.official ? "/" + String(c.official).padStart(String(c.localId || "").length, "0") : "");
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const numsLabel = (parsed) => [...new Set(parsed.nums.map((x) => x.n + (x.total ? "/" + x.total : x.promo ? "/" + x.promo : "")))].join("、");
+
+// 返回 found / manual / none / nonum / error
+async function showResults(parsed, auto, known) {
+  const box = $("results");
+  if (!parsed.nums.length) {
+    if (!auto) {
+      box.innerHTML = "";
+      setStatus(`没读到编号。识别到的文字：<code>${esc(parsed.raw.slice(0, 80)) || "（空）"}</code><br>把卡底部编号对准虚线再试，或者点「手动输入」。`);
+    }
+    return "nonum";
+  }
+  const nn = numsLabel(parsed);
+  let cands;
+  try { cands = known || (await identify(parsed)); } catch (e) { setStatus("网络出错，连不上卡牌数据库：" + esc(e.message)); return "error"; }
+  if (!cands.length) {
+    if (!auto) { box.innerHTML = ""; setStatus(`读到编号 <code>${esc(nn)}</code>，但数据库里没找到这张卡。可以点「手动输入」，写上系列代码，例如 <code>SV8a 236</code>。`); }
+    return "none";
+  }
+  box.innerHTML = "";
+  if (cands[0].manual) {
+    setStatus(`识别为<b>简中</b>卡 <code>${esc(cands[0].setId)} ${esc(nn)}</code>。简中卡目前没有公开的卡牌和价格数据库，可以手动登记到收藏：`);
+    box.appendChild(renderManualAdd(cands[0]));
+    return "manual";
+  }
+  setStatus(cands.length === 1 ? `识别为 <b>${LANGS[cands[0].lang]}</b> · <code>${esc(nn)}</code>` : `读到 <code>${esc(nn)}</code>，有 ${cands.length} 张可能的卡，点你手上那张：`);
+  cands.forEach((c) => (c._first = cands[0]));
+  for (const c of cands) mountCard(c, cands.length > 1, box);
+  setTimeout(() => $("status").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  return "found";
+}
+
+function mountCard(c, choosable, parent, replace) {
+  const el = renderCard(c, choosable);
+  if (replace) replace.replaceWith(el); else parent.appendChild(el);
+  priceFor(c).then((p) => {
+    c.price = p && p.usd != null ? p : null;
+    if (p && p.tpId && !c.tpId) { c.tpId = p.tpId; el.querySelector(":scope > img, :scope > .ph").replaceWith(cardImg(c)); }
+    updatePrice(el, c, c.price);
+    if (!choosable || c._wantSave) autoSave(c, el);
+  });
+  if (!choosable) offerSwitch(c, el);
+  return el;
+}
+
+function renderCard(c, choosable) {
+  const el = document.createElement("div");
+  el.className = "card";
+  el.innerHTML = `<i data-img></i>
+    <div class="meta">
+      <div class="name"><span class="lang-pill">${LANGS[c.lang]}</span>${esc(c.name)}${choosable && c._sim != null && c === c._first ? '<span class="pill saved">最像</span>' : ""}</div>
+      <div class="sub">${esc(c.setName)} · ${esc(c.abbr || c.setId)} ${esc(c.localId)}${numTail(c)}${c.rel ? " · " + esc(String(c.rel).slice(0, 4)) + " 年" : ""}${choosable && c._sim != null ? ` · 卡图相似度 ${Math.max(0, Math.round(c._sim * 100))}%` : ""}</div>
+      <div class="price na" data-p>查询价格中…</div>
+      <div class="sub" data-src></div>
+      <div class="row-actions" data-act></div>
+    </div>`;
+  el.querySelector("[data-img]").replaceWith(cardImg(c));
+  if (choosable) {
+    const b = document.createElement("button"); b.className = "btn small"; b.textContent = "就是这张";
+    b.onclick = () => {
+      $("results").querySelectorAll(".card").forEach((x) => x !== el && x.remove());
+      setStatus(`已选定 <b>${LANGS[c.lang]}</b>`);
+      b.remove(); autoSave(c, el); offerSwitch(c, el);
+    };
+    el.querySelector("[data-act]").appendChild(b);
+  }
+  return el;
+}
+
+async function offerSwitch(c, el) {
+  let alt = null;
+  try { alt = await counterpart(c); } catch {}
+  if (!alt || !el.isConnected) return;
+  const b = document.createElement("button"); b.className = "btn small";
+  b.textContent = `其实是${LANGS[alt.lang]}卡`;
+  b.onclick = () => {
+    if (c._autoKey) { lib = lib.filter((x) => x.key !== c._autoKey); saveLib(); }
+    mountCard(alt, false, null, el);
+    setStatus(`已改为 <b>${LANGS[alt.lang]}</b>`);
+  };
+  el.querySelector("[data-act]").appendChild(b);
+}
+
+function updatePrice(el, c, p) {
+  const pe = el.querySelector("[data-p]");
+  if (p) { pe.className = "price"; pe.dataset.usd = p.usd; pe.textContent = fmt(p.usd); el.querySelector("[data-src]").textContent = p.src + " · " + p.detail; }
+  else { pe.className = "price na"; pe.textContent = c.lang === "zh-cn" ? "简中暂无价格数据" : proxyUrl() ? "暂无价格" : "暂无价格（还没设置价格服务器）"; }
+}
+
+function autoSave(c, el) {
+  if (c.price === undefined) { c._wantSave = true; return; } // 价格还没回来
+  const act = el.querySelector("[data-act]");
+  act.querySelectorAll("[data-save]").forEach((x) => x.remove());
+  const existing = lib.find((x) => x.key === keyOf(c.lang, c.id));
+  const usd = c.price ? c.price.usd : null;
+  if (!existing && usd != null && usd >= threshold) {
+    addToLib(c, 1); c._autoKey = keyOf(c.lang, c.id);
+    act.insertAdjacentHTML("afterbegin", `<span class="pill saved" data-save>超过 $${threshold} USD，已自动收藏</span>`);
+    toast(`已收藏：${c.name}（${fmt(usd)}）`);
+    return;
+  }
+  const b = document.createElement("button"); b.className = "btn small"; b.dataset.save = 1;
+  b.textContent = existing ? "+1 张" : "加入收藏";
+  b.onclick = () => { if (existing) existing.qty++; else addToLib(c, 1); saveLib(); autoSave(c, el); toast("已加入收藏"); };
+  act.prepend(b);
+  if (existing) act.insertAdjacentHTML("afterbegin", `<span class="pill saved" data-save>已在收藏 ×${existing.qty}</span>`);
+}
+
+function addToLib(c, qty) {
+  lib.push({ key: keyOf(c.lang, c.id), lang: c.lang, id: c.id, name: c.name, setName: c.setName, setId: c.abbr || c.setId, setRef: c.setId,
+    localId: c.localId, official: c.official, image: c.image, tpId: c.tpId || null, tpOnly: !!c.tpOnly, abbr: c.abbr || null, rel: c.rel || null, qty,
+    price: c.price ? c.price.usd : null, src: c.price ? c.price.src : "", manual: false, at: Date.now() });
+  saveLib();
+}
+
+// 简中：手动登记（编号来自识别结果）
+function renderManualAdd(c) {
+  const el = document.createElement("form"); el.className = "card"; el.style.gridTemplateColumns = "1fr";
+  el.innerHTML = `<div class="meta" style="gap:8px">
+    <div class="name"><span class="lang-pill">简中</span>${esc(c.setName || c.setId)}</div>
+    <div style="display:flex;gap:6px"><input class="field" id="maCode" value="${esc(c.setId)}" aria-label="系列代码"><input class="field" id="maNum" value="${esc(c.localId)}${numTail(c)}" aria-label="编号"></div>
+    <input class="field" id="maName" placeholder="卡名，例如：皮卡丘ex" aria-label="卡名">
+    <input class="field" id="maPrice" type="number" step="0.01" min="0" inputmode="decimal" placeholder="价格（${CUR[cur].sym} ${cur}，可留空）" aria-label="价格">
+    <button class="btn primary" type="submit">加入简中收藏</button></div>`;
+  el.onsubmit = (e) => {
+    e.preventDefault();
+    const code = el.querySelector("#maCode").value.trim().toUpperCase(), n = el.querySelector("#maNum").value.trim();
+    const [lid, off] = n.split("/");
+    const name = el.querySelector("#maName").value.trim() || `${code} ${n}`;
+    const price = parseFloat(el.querySelector("#maPrice").value);
+    const id = `${code}-${lid}`;
+    const ex = lib.find((x) => x.key === keyOf("zh-cn", id));
+    if (ex) ex.qty++;
+    else lib.push({ key: keyOf("zh-cn", id), lang: "zh-cn", id, name, setName: c.setName || "简中", setId: code, setRef: code, localId: lid,
+      official: off ? parseInt(off, 10) : null, image: "", rel: c.rel || null, qty: 1, price: isNaN(price) ? null : toUsd(price), src: "", manual: true, at: Date.now() });
+    saveLib(); toast(ex ? `已在收藏，数量 +1（×${ex.qty}）` : "已加入简中收藏");
+    el.querySelector("button").disabled = true;
+  };
+  return el;
+}
+
+// ---------- 扫描（一个按钮：开始 → 自动连续识别 → 出结果） ----------
+const hasLiveCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+let stream = null, scanning = false, loopId = 0;
+
+async function openCam() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false });
+  } catch (e) { setStatus("没能打开相机：" + esc(e.message) + "。可以点「从相册选图」。"); return false; }
+  const v = $("video"); v.srcObject = stream; await v.play().catch(() => {});
+  $("vf").classList.remove("idle");
+  v.hidden = false; $("preview").hidden = true; $("guide").hidden = false; $("vfEmpty").hidden = true;
+  return true;
+}
+function closeCam() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null; $("video").hidden = true; $("guide").hidden = true;
+  if ($("preview").hidden) { $("vfEmpty").hidden = false; $("vf").classList.add("idle"); }
+}
+function setScanUI(state) {
+  const b = $("scanBtn");
+  b.classList.toggle("stop", state === "scanning");
+  b.textContent = state === "scanning" ? "停止扫描" : state === "found" ? "扫下一张" : hasLiveCam ? "开始扫描" : "拍照识别";
+  $("guide").classList.toggle("scanning", state === "scanning");
+}
+
+// 每一帧换一种角度 / 处理方式轮流试，卡放歪了或者有反光也能读到
+const FRAME_VARIANTS = [{ angle: 0 }, { angle: -5 }, { angle: 5 }, { angle: 0, adaptive: true }, { angle: -9 }, { angle: 9 }, { angle: -5, adaptive: true }, { angle: 5, adaptive: true }];
+
+// 取相机画面里引导框底部那一条（留出上下余量，卡歪一点也框得住）
+function grabStrip(variant) {
+  const v = $("video"), vf = $("vf"), g = $("guide");
+  const vw = v.videoWidth, vh = v.videoHeight; if (!vw) return null;
+  const box = vf.getBoundingClientRect(), gb = g.getBoundingClientRect();
+  const s = Math.max(box.width / vw, box.height / vh); // object-fit: cover 的换算
+  const ox = (vw * s - box.width) / 2, oy = (vh * s - box.height) / 2;
+  const gx = (gb.left - box.left + ox) / s, gy = (gb.top - box.top + oy) / s, gw = gb.width / s, gh = gb.height / s;
+  return prep(v, gx - gw * 0.05, gy + gh * 0.74, gw * 1.1, gh * 0.32, variant);
+}
+
+async function startScan() {
+  if (!hasLiveCam) { $("shootIn").click(); return; }
+  if (!stream && !(await openCam())) return;
+  $("preview").hidden = true;
+  $("results").innerHTML = "";
+  scanning = true; setScanUI("scanning");
+  const my = ++loopId;
+  try { await getWorker(); } catch (e) { setStatus("识别引擎加载失败，请检查网络：" + esc(e.message)); stopScan(); return; }
+  setStatus("把卡放进框里，底部编号对准黄色虚线…");
+  const recent = [];           // 最近几帧的读数
+  let frame = 0, unsure = 0, unsureBest = null, votes = [], voteSig = "";
+  while (scanning && my === loopId) {
+    const strip = grabStrip(FRAME_VARIANTS[frame++ % FRAME_VARIANTS.length]);
+    if (!strip) { await sleep(200); continue; }
+    let parsed, words;
+    try { const o = await ocrWords(strip); parsed = parseText(o.text); words = o.words; } catch { await sleep(300); continue; }
+    if (!scanning || my !== loopId) break;
+    recent.push(parsed); if (recent.length > 5) recent.shift();
+    if (parsed.nums.length) {
+      const sig = numsLabel(parsed);
+      // 最近几帧里第二次读到同一个编号才算数，避免看错数字；这些帧里的语言标记合并起来用
+      const same = recent.slice(0, -1).filter((p) => numsLabel(p) === sig);
+      if (same.length) {
+        for (const p of same) {
+          parsed.twPrev = parsed.twPrev.concat(p.twPrev);
+          parsed.en = parsed.en || p.en;
+          parsed.tokens = parsed.tokens.concat(p.tokens.filter((t) => !parsed.tokens.includes(t)));
+        }
+        setStatus(`读到 <code>${esc(sig)}</code>，查找中…`);
+        if (sig !== voteSig) { votes = []; voteSig = sig; unsure = 0; unsureBest = null; }
+        let ref;
+        try { ref = await refineWithCode(strip, words, parsed, votes); } catch { ref = { parsed, cands: [] }; }
+        if (my !== loopId) return;
+        // 只靠编号认出来的，卡图对不上就不算（多半是编号读错了）
+        if (confident(ref.cands) && !ref.viaVote && weakEvidence(ref.cands[0])) {
+          const s = await imageSim(ref.cands[0], liveCardSigs()).catch(() => null);
+          if (my !== loopId) return;
+          if (s !== null && s < 0.3) { setStatus(`读到 <code>${esc(sig)}</code>，但卡图对不上，继续扫描…`); recent.length = 0; await sleep(80); continue; }
+        }
+        // 投票选出来的，用卡图核对一下
+        if (ref.viaVote) {
+          const ir = await imageRerank(ref.all, liveCardSigs()).catch(() => null);
+          if (my !== loopId) return;
+          if (ir && ir.pick) { await showPicked(ref.parsed, ir); scanning = false; setScanUI("found"); return; }
+        }
+        // 文字拿不准时先和候选卡图片比一比
+        if (ref.cands.length && !confident(ref.cands)) {
+          setStatus(`读到 <code>${esc(sig)}</code>，正在比对卡图…`);
+          const ir = await imageRerank(ref.cands, liveCardSigs()).catch(() => null);
+          if (my !== loopId) return;
+          if (ir && ir.pick) { await showPicked(ref.parsed, ir); scanning = false; setScanUI("found"); return; }
+        }
+        // 还是拿不准就多看几帧（继续投票），最后再列出候选让你点
+        if (ref.cands.length && !confident(ref.cands) && ++unsure < 6) {
+          unsureBest = unsureBest || ref;
+          setStatus(`读到 <code>${esc(sig)}</code>，正在确认系列代码…`);
+          recent.length = 0; await sleep(80); continue;
+        }
+        if (!ref.cands.length && unsureBest) ref = unsureBest;
+        let list = ref.cands;
+        if (list.length > 1) { try { list = await orderByImage(list, liveCardSigs()); } catch {} }
+        if (my !== loopId) return;
+        const r = await showResults(ref.parsed, true, list);
+        if (my !== loopId) return;
+        if (r === "found" || r === "manual") { scanning = false; setScanUI("found"); return; }
+        setStatus(`读到 <code>${esc(sig)}</code>，数据库里没找到，继续扫描…`);
+        recent.length = 0;
+      }
+    }
+    await sleep(80);
+  }
+}
+function stopScan() { scanning = false; loopId++; closeCam(); setScanUI("idle"); }
+
+$("scanBtn").onclick = () => { if (scanning) { stopScan(); setStatus(""); } else startScan(); };
+
+// 图片比对选中了某张：显示结果，并注明是靠卡图确认的
+async function showPicked(parsed, ir) {
+  const r = await showResults(parsed, false, [ir.pick]);
+  $("status").insertAdjacentHTML("beforeend", ` · 卡图比对确认（相似度 ${Math.round(ir.sim * 100)}%）`);
+  return r;
+}
+
+// 拍照 / 相册：卡可能在照片任何位置、可能歪，按横条从下往上扫，每条再试几个角度
+async function scanFromImage(img) {
+  const w = img.naturalWidth, h = img.naturalHeight;
+  await getWorker();
+  const bands = [];
+  for (let y0 = 0.36; y0 <= 0.86; y0 += 0.07) bands.push(y0);
+  bands.sort((a, b) => Math.abs(a + 0.09 - 0.8) - Math.abs(b + 0.09 - 0.8)); // 卡底编号通常在照片 70%~90% 高度
+  const passes = [{ angle: 0 }, { angle: -4 }, { angle: 4 }, { angle: -8 }, { angle: 8 }, { angle: 0, adaptive: true }, { angle: -12 }, { angle: 12 }];
+  const total = passes.length * bands.length;
+  let k = 0, firstParsed = null, unsureBest = null;
+  const votes = [], querySigs = [], slid = new Set();
+  for (const pass of passes) {
+    for (const y0 of bands) {
+      k++;
+      setStatus(`识别中…（${k}/${total}）`);
+      const canvas = prep(img, 0, h * y0, w, h * 0.18, { target: 1600, ...pass });
+      const o = await ocrWords(canvas);
+      const parsed = parseText(o.text);
+      if (!parsed.nums.length) continue;
+      firstParsed = firstParsed || parsed;
+      if (firstParsed !== parsed && numsLabel(firstParsed) !== numsLabel(parsed)) continue; // 只和第一次读到的编号一起投票
+      const ref = await refineWithCode(canvas, o.words, parsed, votes);
+      if (confident(ref.cands)) {
+        if (ref.viaVote) {
+          const ir = await imageRerank(ref.all, photoCardSigs(img, canvas, o.words));
+          if (ir && ir.pick) return showPicked(ref.parsed, ir); // 卡图说了算
+        }
+        if (weakEvidence(ref.cands[0])) {
+          const s = await imageSim(ref.cands[0], photoCardSigs(img, canvas, o.words).concat(slideSigs(img, Math.round((canvas._map.a * 180) / Math.PI))));
+          if (s !== null && s < 0.3) continue; // 卡图对不上，多半是编号读错了，换个角度再读
+        }
+        return showResults(ref.parsed, false, ref.cands);
+      }
+      if (!ref.cands.length) continue;
+      unsureBest = unsureBest || ref;
+      // 文字拿不准：用这次的位置推算卡面，再加上整张照片滑窗，和候选卡图片比一比
+      querySigs.push(...photoCardSigs(img, canvas, o.words));
+      if (!slid.size) { slid.add(1); querySigs.push(...slideSigs(img, Math.round((canvas._map.a * 180) / Math.PI))); }
+      setStatus(`识别中…（${k}/${total}）· 比对卡图`);
+      const ir = await imageRerank(unsureBest.cands, querySigs);
+      if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
+      // 卡图也分不出（比如复刻和原版几乎一样）：再读也没用，直接列出来让你选
+      if (ir && ir.scores.length >= 2) return showResults(unsureBest.parsed, false, await orderByImage(unsureBest.cands, querySigs));
+    }
+    if (unsureBest && k >= bands.length * 6) break; // 试过 ±8° 和反光处理还拿不准，就列出候选
+  }
+  if (unsureBest) {
+    const ir = await imageRerank(unsureBest.cands, querySigs);
+    if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
+    return showResults(unsureBest.parsed, false, await orderByImage(unsureBest.cands, querySigs));
+  }
+  return showResults(firstParsed || { nums: [], tokens: [], twPrev: [], raw: "" }, false);
+}
+function onPhoto(e) {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  scanning = false; loopId++; closeCam(); setScanUI("idle");
+  const img = $("preview");
+  img.onload = async () => { try { await scanFromImage(img); } catch (err) { setStatus("识别失败：" + esc(err.message)); } };
+  img.src = URL.createObjectURL(f); img.hidden = false; $("vfEmpty").hidden = true; $("vf").classList.remove("idle");
+  $("results").innerHTML = "";
+  e.target.value = "";
+}
+$("shootIn").onchange = onPhoto;
+$("pickIn").onchange = onPhoto;
+
+$("manualToggle").onclick = () => {
+  const f = $("manualForm"); f.hidden = !f.hidden;
+  $("manualToggle").setAttribute("aria-expanded", String(!f.hidden));
+  if (!f.hidden) $("manualIn").focus();
+};
+$("manualForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const s = $("manualIn").value.trim(); if (!s) return;
+  if (scanning) { scanning = false; loopId++; setScanUI(stream ? "found" : "idle"); }
+  setStatus("查找卡牌中…");
+  await showResults(parseText(s, true), false);
+};
+
+// ---------- 收藏页：一个总列表，可按版本筛选、排序 ----------
+const numOf = (it) => parseInt(it.localId, 10) || 0;
+function sortItems(items) {
+  const byNum = (a, b) => numOf(a) - numOf(b);
+  const relOf = (it) => it.rel || "";
+  const cmp = {
+    "price-desc": (a, b) => (b.price ?? -1) - (a.price ?? -1) || byNum(a, b),
+    "price-asc": (a, b) => (a.price ?? Infinity) - (b.price ?? Infinity) || byNum(a, b),
+    // 没有发售日期的排最后
+    "set-new": (a, b) => (relOf(b) > relOf(a) ? 1 : relOf(b) < relOf(a) ? -1 : 0) || String(a.setId).localeCompare(String(b.setId)) || byNum(a, b),
+    "set-old": (a, b) => (!a.rel) - (!b.rel) || (relOf(a) > relOf(b) ? 1 : relOf(a) < relOf(b) ? -1 : 0) || String(a.setId).localeCompare(String(b.setId)) || byNum(a, b),
+  }[libSort];
+  return items.slice().sort(cmp);
+}
+function renderLib() {
+  const f = $("libFilters"); f.innerHTML = "";
+  for (const key of ["all", ...LANG_KEYS]) {
+    const items = key === "all" ? lib : lib.filter((x) => x.lang === key);
+    const b = document.createElement("button");
+    b.className = "fchip"; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(key === libFilter));
+    b.innerHTML = `${key === "all" ? "全部" : LANGS[key]}<b>${items.reduce((a, x) => a + x.qty, 0)}</b>`;
+    b.onclick = () => { libFilter = key; store.set("ptcg.filter", key); renderLib(); };
+    f.appendChild(b);
+  }
+  $("sortSel").value = libSort;
+  const items = sortItems(libFilter === "all" ? lib : lib.filter((x) => x.lang === libFilter));
+  renderLibHeader();
+  const list = $("libList"); list.innerHTML = "";
+  if (!items.length) {
+    list.innerHTML = `<div class="empty">${libFilter === "all" ? "" : LANGS[libFilter]}收藏还是空的。<br>扫描到价格 ≥ $${threshold} USD 的卡会自动放进来，<br>也可以在扫描结果里点「加入收藏」。</div>`;
+  }
+  for (const it of items) list.appendChild(renderLibItem(it));
+  const last = store.get("ptcg.lastRefresh", 0);
+  $("lastRefresh").textContent = last ? "上次刷新价格：" + new Date(last).toLocaleString() : "";
+  fillMissingRel();
+}
+
+function renderLibItem(it) {
+  const el = document.createElement("div"); el.className = "card";
+  el.innerHTML = `<i data-img></i>
+    <div class="meta">
+      <div class="name"><span class="lang-pill">${LANGS[it.lang]}</span>${esc(it.name)}</div>
+      <div class="sub">${esc(it.setName)} · ${esc(it.setId)} ${esc(it.localId)}${numTail(it)}${it.rel ? " · " + esc(it.rel.slice(0, 7)) : ""}</div>
+      <div>${it.price != null ? `<span class="price" data-usd="${it.price}">${fmt(it.price)}</span>` : '<span class="price na">暂无价格</span>'}<span class="price-src">${esc(it.manual ? "手动" : it.src)}</span></div>
+      <div class="row-actions">
+        <span class="qty"><button aria-label="减一" data-d="-1">−</button><input aria-label="数量" inputmode="numeric" value="${it.qty}"><button aria-label="加一" data-d="1">+</button></span>
+        <button class="btn small" data-edit>改价格</button>
+        <button class="btn small" data-del>删除</button>
+      </div>
+    </div>`;
+  el.querySelector("[data-img]").replaceWith(cardImg(it));
+  const qi = el.querySelector(".qty input");
+  el.querySelectorAll(".qty button").forEach((b) => b.onclick = () => { it.qty = Math.max(1, it.qty + +b.dataset.d); qi.value = it.qty; saveLib(); renderLibHeader(); });
+  qi.onchange = () => { const v = parseInt(qi.value, 10); it.qty = v > 0 ? v : 1; qi.value = it.qty; saveLib(); renderLibHeader(); };
+  el.querySelector("[data-del]").onclick = (e) => {
+    const act = e.target.parentElement;
+    act.innerHTML = `<span class="confirm">确定删除？<button class="btn small" data-y style="color:var(--bad)">删除</button><button class="btn small" data-n>取消</button></span>`;
+    act.querySelector("[data-y]").onclick = () => { lib = lib.filter((x) => x !== it); saveLib(); renderLib(); };
+    act.querySelector("[data-n]").onclick = renderLib;
+  };
+  el.querySelector("[data-edit]").onclick = (e) => {
+    const act = e.target.parentElement;
+    const cd = CUR[cur].dec;
+    act.innerHTML = `<span class="confirm">${CUR[cur].sym}<input class="field" type="number" step="${cd ? "0.01" : "1"}" min="0" inputmode="decimal" style="width:100px" value="${it.price != null ? fromUsd(it.price).toFixed(cd) : ""}" aria-label="价格（${cur}）"><button class="btn small" data-y>保存</button>${it.lang === "zh-cn" ? "" : '<button class="btn small" data-auto>用自动价格</button>'}</span>`;
+    act.querySelector("[data-y]").onclick = () => { const v = parseFloat(act.querySelector("input").value); if (v >= 0) { it.price = toUsd(v); it.manual = true; saveLib(); } renderLib(); };
+    const auto = act.querySelector("[data-auto]");
+    if (auto) auto.onclick = async () => { it.manual = false; await refreshItem(it); saveLib(); renderLib(); };
+  };
+  return el;
+}
+function renderLibHeader() {
+  const items = libFilter === "all" ? lib : lib.filter((x) => x.lang === libFilter);
+  $("libTotal").textContent = fmt(items.reduce((a, x) => a + (x.price || 0) * x.qty, 0));
+  $("libCount").textContent = `${items.reduce((a, x) => a + x.qty, 0)} 张 · ${items.length} 种`;
+  document.querySelectorAll("#libFilters .fchip").forEach((t, i) => {
+    const key = ["all", ...LANG_KEYS][i];
+    t.querySelector("b").textContent = (key === "all" ? lib : lib.filter((x) => x.lang === key)).reduce((a, x) => a + x.qty, 0);
+  });
+}
+$("sortSel").onchange = () => { libSort = $("sortSel").value; store.set("ptcg.sort", libSort); renderLib(); };
+
+// 旧收藏没有发售日期的，后台补上（版本排序要用）
+async function relFor(it) {
+  const ref = it.setRef || String(it.id || "").replace(/-[^-]+$/, "");
+  for (const l of it.lang === "zh-tw" ? ["zh-tw", "ja"] : [it.lang]) {
+    try { const d = await getSetCached(l, ref); if (d.rel) return d.rel; } catch {}
+  }
+  return null;
+}
+let filling = false;
+async function fillMissingRel() {
+  const todo = lib.filter((x) => x.rel === undefined);
+  if (filling || !todo.length) return;
+  filling = true;
+  for (const it of todo) it.rel = await relFor(it);
+  saveLib(); filling = false;
+  if (!$("pageLib").hidden && libSort.startsWith("set")) renderLib();
+}
+
+async function refreshItem(it) {
+  if (it.manual) return;
+  const p = await priceFor(it);
+  if (p && p.tpId) it.tpId = p.tpId;
+  if (p && p.usd != null) { it.price = p.usd; it.src = p.src; }
+  else if (/Cardmarket/.test(it.src || "")) { it.price = null; it.src = ""; } // 旧版存的欧元价不再使用
+  it.at = Date.now();
+}
+let refreshing = false;
+async function refreshAll(force, quiet) {
+  if (refreshing) return;
+  const last = store.get("ptcg.lastRefresh", 0);
+  const stale = lib.some((x) => /Cardmarket/.test(x.src || "")); // 旧版的欧元价，马上换掉
+  if (!force && !stale && Date.now() - last < REFRESH_MS) return;
+  refreshing = true; $("refreshBtn").disabled = true; $("refreshBtn").textContent = "刷新中…";
+  await loadFx();
+  for (const it of lib) { try { await refreshItem(it); } catch {} }
+  saveLib(); store.set("ptcg.lastRefresh", Date.now());
+  refreshing = false; $("refreshBtn").disabled = false; $("refreshBtn").textContent = "刷新价格";
+  if (!$("pageLib").hidden) renderLib();
+  if (force && !quiet) toast("价格已更新");
+}
+$("refreshBtn").onclick = () => refreshAll(true);
+
+// 备份
+$("exportBtn").onclick = async () => {
+  const data = JSON.stringify({ app: "ptcg-scanner", v: 2, at: new Date().toISOString(), lib }, null, 1);
+  const name = "ptcg-收藏备份-" + new Date().toISOString().slice(0, 10) + ".json";
+  const file = new File([data], name, { type: "application/json" });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; } } catch (e) { if (e.name === "AbortError") return; }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; a.click();
+};
+$("importIn").onchange = async (e) => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  try {
+    const j = JSON.parse(await f.text());
+    const items = Array.isArray(j) ? j : j.lib;
+    let added = 0;
+    for (const it of items || []) {
+      if (!it || !it.key || !LANGS[it.lang]) continue;
+      const ex = lib.find((x) => x.key === it.key);
+      if (ex) ex.qty = Math.max(ex.qty, it.qty || 1); else { lib.push(it); added++; }
+    }
+    saveLib(); renderLib(); toast(`导入完成，新增 ${added} 种`);
+  } catch { toast("文件格式不对，导入失败"); }
+  e.target.value = "";
+};
+// 价格服务器（worker.js 部署后的地址）
+function showProxy() {
+  $("proxyIn").value = store.get("ptcg.proxy", "");
+  $("proxyState").textContent = proxyUrl() ? "✓ 已连接 TCGplayer 价格" : "未设置：日版、繁中暂时没有价格";
+}
+$("proxyForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const v = $("proxyIn").value.trim();
+  store.set("ptcg.proxy", v);
+  if (v) {
+    try {
+      const r = await fetch(`${v.replace(/\/+$/, "")}?q=${encodeURIComponent("SV8a 236")}&line=pokemon-japan`);
+      const j = await r.json();
+      if (!Array.isArray(j.items)) throw new Error();
+      toast("价格服务器可用");
+    } catch { toast("连不上这个地址，请检查是否填对"); }
+  }
+  showProxy();
+  refreshAll(true, true);
+};
+showProxy();
+$("thresholdIn").value = threshold;
+$("thresholdIn").onchange = () => { const v = parseFloat($("thresholdIn").value); threshold = v >= 0 ? v : 5; $("thresholdIn").value = threshold; store.set("ptcg.threshold", threshold); };
+
+// ---------- 导航 ----------
+function go(page) {
+  const scan = page === "scan";
+  $("pageScan").hidden = !scan; $("pageLib").hidden = scan;
+  if (scan) { $("navScan").setAttribute("aria-current", "page"); $("navLib").removeAttribute("aria-current"); }
+  else { $("navLib").setAttribute("aria-current", "page"); $("navScan").removeAttribute("aria-current"); }
+  if (!scan) { stopScan(); renderLib(); refreshAll(false); }
+}
+$("navScan").onclick = () => go("scan");
+$("navLib").onclick = () => go("lib");
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { if (stream) stopScan(); }
+  else refreshAll(false);
+});
+setInterval(() => refreshAll(false), 5 * 60 * 1000);
+
+setScanUI("idle");
+renderFx();
+loadFx();
+getIndex();          // 预先加载四种语言的系列列表
+refreshAll(false);
+window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank };
+</script>
+</body>
+</html>

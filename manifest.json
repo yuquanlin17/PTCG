@@ -1,0 +1,8 @@
+{
+  "name": "PTCG 卡价扫描",
+  "short_name": "卡价扫描",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0f1116",
+  "theme_color": "#0f1116"
+}
