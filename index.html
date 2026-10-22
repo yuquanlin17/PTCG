@@ -550,6 +550,8 @@ async function resolveAiText(text, sigs) {
   }
   const ir = await resolveByImage(cands, sigs);
   if (ir && ir.pick) return { parsed, pick: ir.pick, sim: ir.sim };
+  // AI 读到的只有一张，形近编号里也没有明显更像的：就是这张
+  if (cands.length === 1 && !clearlyBetter(ir, cands[0], 0)) return { parsed, pick: cands[0], sim: null };
   return { parsed, list: ir && ir.scores.length ? ir.scores.map((x) => x.c) : cands };
 }
 
@@ -783,14 +785,17 @@ function photoCardSigs(img, canvas, words) {
   return out;
 }
 // 分不清时让用户选：按卡图相似度排好，明显不像的不列出来
-async function orderByImage(cands, sigs) {
+// readNums：读到的编号。编号和总数都对得上的卡永远保留并排前面（卡图看不清时，读到的数字更可信）
+async function orderByImage(cands, sigs, readNums = []) {
   if (cands.length < 2 || !sigs.length) return cands;
+  const isExact = (c) => readNums.some((x) => x.n === parseInt(c.localId, 10) && (!x.total || !c.official || x.total === c.official));
   const scored = [];
-  for (const c of cands.slice(0, 10)) { c._sim = await imageSim(c, sigs); scored.push(c); }
+  for (const c of cands.slice(0, 10)) { c._sim = await imageSim(c, sigs); c._exact = isExact(c); scored.push(c); }
   const top = Math.max(...scored.map((c) => (c._sim == null ? -1 : c._sim)));
+  const key = (c) => (c._sim ?? -1) + (c._exact && top < 0.6 ? 0.3 : c._exact ? 0.05 : 0);
   return scored
-    .filter((c) => c._sim == null || top < 0.4 || c._sim >= top - 0.25)
-    .sort((a, b) => (b._sim ?? -1) - (a._sim ?? -1));
+    .filter((c) => c._exact || c._sim == null || top < 0.4 || c._sim >= top - 0.25)
+    .sort((a, b) => key(b) - key(a));
 }
 
 // 文字证据不够强（没对上系列代码，只靠编号）的结果，要再看卡图像不像
@@ -856,7 +861,8 @@ async function withLookalikes(cands) {
 function clearlyBetter(ir, c, s) {
   if (!ir || !ir.scores) return false;
   const orig = ir.scores.find((x) => x.c.id === c.id), base = orig ? orig.s : s;
-  return ir.scores.some((x) => x.c.id !== c.id && x.s - base >= 0.08);
+  // 那张也得真的像（≥0.5）：反光严重时各张都不像，「稍微像一点」不算
+  return ir.scores.some((x) => x.c.id !== c.id && x.s >= 0.5 && x.s - base >= 0.08);
 }
 
 // 用卡图在候选里挑；挑不出且都不像时，加上形近数字的卡再挑一次
@@ -867,6 +873,8 @@ async function resolveByImage(cands, sigs) {
     const ext = await withLookalikes(cands);
     if (ext.length > cands.length) {
       const ir2 = await imageRerank(ext, sigs, 20);
+      // 换成形近编号的卡，必须那张卡图真的像（≥0.5）；反光严重时各张都不像，别拿「稍微像一点」的去替换读到的编号
+      if (ir2 && ir2.pick && !cands.includes(ir2.pick) && ir2.sim < 0.5) ir2.pick = null;
       if (ir2 && (ir2.pick || !ir || ir2.sim > ir.sim)) ir = ir2;
     }
   }
@@ -1118,7 +1126,8 @@ async function identify(parsed) {
   out.push(...tpCands);
   // 什么都没找到、或者只有很弱的候选：编号和总数都可能读错了（110/080 读成 770/50，076 读成 075），
   // 换形近数字再找日版候选，交给卡图挑
-  if ((!out.length || out.every((c) => (c.score || 0) < 3)) && !parsed.en && !tpCands.length) {
+  // （读到的编号 / 总数已经能直接对上某个系列时不做：形近数字只会混进错的卡）
+  if (!out.some((c) => (c.score || 0) >= 2) && !parsed.en && !tpCands.length) {
     const officials = new Set(idx.ja.list.map((s) => s.cardCount && s.cardCount.official));
     for (const num of parsed.nums.filter((x) => x.total)) {
       const totals = [num.total, ...lookalikeNums(num.total)].filter((t) => officials.has(t));
@@ -1279,7 +1288,7 @@ function renderCard(c, choosable) {
   el.className = "card";
   el.innerHTML = `<i data-img></i>
     <div class="meta">
-      <div class="name"><span class="lang-pill">${LANGS[c.lang]}</span>${esc(c.name)}${choosable && c._sim != null && c === c._first ? '<span class="pill saved">最像</span>' : ""}</div>
+      <div class="name"><span class="lang-pill">${LANGS[c.lang]}</span>${esc(c.name)}${choosable && c === c._first && (c._exact || c._sim != null) ? `<span class="pill saved">${c._exact ? "读到的编号" : "最像"}</span>` : ""}</div>
       <div class="sub">${esc(c.setName)} · ${esc(c.abbr || c.setId)} ${esc(c.localId)}${numTail(c)}${c.rel ? " · " + esc(String(c.rel).slice(0, 4)) + " 年" : ""}${choosable && c._sim != null ? ` · 卡图相似度 ${Math.max(0, Math.round(c._sim * 100))}%` : ""}</div>
       <div class="price na" data-p>查询价格中…</div>
       <div class="sub" data-src></div>
@@ -1436,7 +1445,28 @@ async function startScan() {
   const recent = [];           // 最近几帧的读数
   let frame = -1, unsure = 0, unsureBest = null, votes = [], voteSig = "", stick = false;
   const startedAt = Date.now(); let lastHit = Date.now();
-  let framesDone = 0, noNumFrames = 0, deepTried = false, aiTries = 0; const hintTotals = new Map(), seenCands = [], searchedSets = new Set(), triedLone = new Set();
+  let framesDone = 0, noNumFrames = 0, deepTried = false, aiTries = 0;
+  // 请 AI 读卡底（每次扫描最多两次）；认出来了返回 true（扫描结束）
+  const tryAi = async () => {
+    if (aiTries >= 2 || !proxyUrl() || aiDisabled) return false;
+    aiTries++;
+    const crop = liveAiCrop();
+    if (!crop) return false;
+    setStatus("正在请 AI 帮忙读卡底…");
+    const text = await aiRead(crop);
+    if (my !== loopId) return true;
+    if (!text) return false;
+    $("ocrPeek").hidden = false; $("ocrPeek").textContent = "AI 读到：" + text;
+    const res = await resolveAiText(text, liveCardSigs().concat(slideSigs($("video"), 0, true))).catch(() => null);
+    if (my !== loopId) return true;
+    if (res && res.pick) {
+      await showResults(res.parsed, true, [res.pick]);
+      $("status").insertAdjacentHTML("beforeend", ` · AI 读卡底：${esc(text)}`);
+      finishScan(); return true;
+    }
+    if (res && res.list.length > 1) { await showResults(res.parsed, true, await orderByImage(res.list, [], res.parsed.nums)); finishScan(); return true; }
+    return false;
+  }; const hintTotals = new Map(), seenCands = [], searchedSets = new Set(), triedLone = new Set();
   while (scanning && my === loopId) {
     // 上一帧读到了编号，就继续用同一种处理方式，方便连续两次读到同样的结果
     if (!stick) frame++;
@@ -1487,7 +1517,9 @@ async function startScan() {
               if (my !== loopId) return;
               if (r === "found") { finishScan(); return; }
             }
-            const sets = (await setsFor(ref.cands, parsed.totalHints)).filter((x) => !searchedSets.has(x.slug));
+            // 整个系列逐张比卡图：只有画面看得清（形近编号里有卡相似度 ≥0.5）时才做，反光严重时比也比不出来
+            const imgUsable = ir && ir.sim >= 0.5;
+            const sets = imgUsable ? (await setsFor(ref.cands, parsed.totalHints)).filter((x) => !searchedSets.has(x.slug)) : [];
             if (my !== loopId) return;
             if (sets.length) {
               sets.forEach((x) => searchedSets.add(x.slug));
@@ -1496,7 +1528,15 @@ async function startScan() {
               if (my !== loopId) return;
               if (r && r.ok) { await showSetHit(r, true, seenCands); finishScan(); return; }
             }
-            if (++unsure < 6) { setStatus(`读到 <code>${esc(sig)}</code>，还不确定，继续扫描…`); recent.length = 0; await sleep(80); continue; }
+            unsure++;
+            if (await tryAi()) return; // 先请 AI 读一下卡底
+            // 反光严重、卡图看不清，也没有哪张形近编号的卡明显更像：按读到的编号显示，让你核对
+            if (unsure >= 2 && !clearlyBetter(ir, ref.cands[0], s ?? 0)) {
+              const r = await showResults(ref.parsed, true, ref.cands);
+              if (my !== loopId) return;
+              if (r === "found") { $("status").insertAdjacentHTML("beforeend", " · 卡图看不清，按读到的编号显示，请核对"); finishScan(); return; }
+            }
+            if (unsure < 6) { setStatus(`读到 <code>${esc(sig)}</code>，还不确定，继续扫描…`); recent.length = 0; await sleep(80); continue; }
             // 多次都确认不了：列出来让你确认
           }
         }
@@ -1514,15 +1554,19 @@ async function startScan() {
           if (ir && ir.pick) return done(ir);
           if (ir && ir.scores.length > ref.cands.length) ref = { ...ref, cands: ir.scores.map((x) => x.c) }; // 带上形近数字的候选
         }
-        // 还是拿不准就多看几帧（继续投票），最后再列出候选让你点
-        if (ref.cands.length && !confident(ref.cands) && ++unsure < 6) {
-          unsureBest = unsureBest || ref;
-          setStatus(`读到 <code>${esc(sig)}</code>，正在确认系列代码…`);
-          recent.length = 0; await sleep(80); continue;
+        // 还是拿不准：先请 AI 读卡底，再多看几帧（继续投票），最后列出候选让你点
+        if (ref.cands.length && !confident(ref.cands)) {
+          unsure++;
+          if (await tryAi()) return;
+          if (unsure < 6) {
+            unsureBest = unsureBest || ref;
+            setStatus(`读到 <code>${esc(sig)}</code>，正在确认系列代码…`);
+            recent.length = 0; await sleep(80); continue;
+          }
         }
         if (!ref.cands.length && unsureBest) ref = unsureBest;
         let list = ref.cands;
-        if (list.length > 1) { try { list = await orderByImage(list, liveCardSigs().concat(slideSigs($("video"), 0, true))); } catch {} }
+        if (list.length > 1) { try { list = await orderByImage(list, liveCardSigs().concat(slideSigs($("video"), 0, true)), ref.parsed.nums); } catch {} }
         if (my !== loopId) return;
         const r = await showResults(ref.parsed, true, list);
         if (my !== loopId) return;
@@ -1571,28 +1615,12 @@ async function startScan() {
         }
       }
     }
-    // 连续几帧都读不出、或者一直拿不准：把卡底截图交给 AI 读（每次扫描最多两次）
+    // 连续几帧都读不出编号：把卡底截图交给 AI 读（每次扫描最多两次）
     if (parsed.nums.length) noNumFrames = 0; else noNumFrames++;
-    if ((noNumFrames >= 5 || unsure >= 2) && aiTries < 2 && proxyUrl() && !aiDisabled) {
-      aiTries++; noNumFrames = 0;
-      const crop = liveAiCrop();
-      if (crop) {
-        setStatus("编号不好读，正在请 AI 帮忙读卡底…");
-        const text = await aiRead(crop);
-        if (my !== loopId) return;
-        if (text) {
-          $("ocrPeek").textContent = "AI 读到：" + text;
-          const res = await resolveAiText(text, liveCardSigs().concat(slideSigs($("video"), 0, true))).catch(() => null);
-          if (my !== loopId) return;
-          if (res && res.pick) {
-            await showResults(res.parsed, true, [res.pick]);
-            $("status").insertAdjacentHTML("beforeend", ` · AI 读卡底${res.sim != null ? `，卡图相似度 ${Math.round(res.sim * 100)}%` : ""}`);
-            finishScan(); return;
-          }
-          if (res && res.list.length > 1) { await showResults(res.parsed, true, res.list); finishScan(); return; }
-        }
-        setStatus("把卡放进框里，底部编号对准黄色虚线…");
-      }
+    if (noNumFrames >= 5 && aiTries < 2 && proxyUrl() && !aiDisabled) {
+      noNumFrames = 0;
+      if (await tryAi()) return;
+      setStatus("把卡放进框里，底部编号对准黄色虚线…");
     }
     // 连续很多帧都读不到编号：截下整个画面，用照片模式完整分析一次（只做一次）
     if (noNumFrames >= 12 && !deepTried) {
@@ -1738,7 +1766,7 @@ async function scanFromImage(img, quiet) {
       if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
       // 卡图也分不出（比如复刻和原版几乎一样）：再读也没用，直接列出来让你选
       // （从相机兜底调用时，卡图也都不像就别列了，多半是读到了杂讯）
-      if (ir && ir.scores.length >= 2 && (!quiet || ir.sim >= 0.45)) return showResults(unsureBest.parsed, false, await orderByImage(ir.scores.map((x) => x.c), querySigs));
+      if (ir && ir.scores.length >= 2 && (!quiet || ir.sim >= 0.45)) return showResults(unsureBest.parsed, false, await orderByImage(ir.scores.map((x) => x.c), querySigs, unsureBest.parsed.nums));
       if (quiet) unsureBest = null;
     }
     if (unsureBest && k >= bands.length * 6) break; // 试过 ±8° 和反光处理还拿不准，就列出候选
@@ -1759,7 +1787,7 @@ async function scanFromImage(img, quiet) {
     const ir = await resolveByImage(unsureBest.cands, querySigs);
     if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
     if (quiet) return "none";
-    return showResults(unsureBest.parsed, false, await orderByImage(unsureBest.cands, querySigs));
+    return showResults(unsureBest.parsed, false, await orderByImage(unsureBest.cands, querySigs, unsureBest.parsed.nums));
   }
   if (quiet) return "none";
   return showResults(firstParsed || { nums: [], tokens: [], twPrev: [], raw: "" }, false);
