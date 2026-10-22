@@ -5,15 +5,28 @@ const CACHE_SECONDS = 30 * 60;
 
 export default {
   async fetch(request, env, ctx) {
-    const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS" };
+    const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "content-type" };
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
     const url = new URL(request.url);
+    // POST /read：网页自带的识别读不出卡底文字时，交给 Workers AI 的看图模型来读（需要绑定 Workers AI，变量名 AI）
+    if (url.pathname === "/read" && request.method === "POST") return readCard(request, env, cors);
+    // POST /track {ids}：登记要每天记录价格的卡（收藏里的卡），需要绑定 KV，变量名 KV
+    if (url.pathname === "/track" && request.method === "POST") return track(request, env, cors);
+    // ?kv=商品id：读 Worker 每天记下的价格
+    const kvId = (url.searchParams.get("kv") || "").replace(/\D/g, "").slice(0, 12);
+    if (kvId) return kvHistory(kvId, env, cors);
+    // ?pc=搜索词&n=编号：PriceCharting 的长期月度价格（3 年 / 5 年 / 全部）
+    const pcq = (url.searchParams.get("pc") || "").trim().slice(0, 120);
+    if (pcq) return pcHistory(pcq, (url.searchParams.get("n") || "").replace(/\D/g, ""), ctx, cors);
     const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
     const line = url.searchParams.get("line") === "pokemon-japan" ? "pokemon-japan" : "pokemon";
     // ?set=m6-storm-emeralda：列出整个系列的卡（用来按卡图比对），缓存 1 天
     const set = (url.searchParams.get("set") || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 80);
     if (set) return listSet(set, line, ctx, cors);
+    // ?history=商品id&range=month|quarter|annual：历史市价（画价格曲线用），缓存 6 小时
+    const hist = (url.searchParams.get("history") || "").replace(/\D/g, "").slice(0, 12);
+    if (hist) return priceHistory(hist, url.searchParams.get("range"), ctx, cors);
     if (!q) return new Response(JSON.stringify({ error: "missing q" }), { status: 400, headers: { "content-type": "application/json", ...cors } });
 
     const cache = caches.default;
@@ -53,7 +66,184 @@ export default {
     ctx.waitUntil(cache.put(key, resp.clone()));
     return resp;
   },
+
+  // 定时任务（Settings → Triggers → Cron，建议 */30 * * * *）：每次给一批登记的卡记今天的价格
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(snapshot(env));
+  },
 };
+
+// ---------- 浏览器一样的请求头（不然容易被当成机器人） ----------
+const BROWSER_HEADERS = {
+  "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+  accept: "text/html,application/json,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+};
+const jsonResp = (o, cors, status = 200, maxAge = 0) => new Response(JSON.stringify(o), {
+  status, headers: { "content-type": "application/json; charset=utf-8", ...(maxAge ? { "cache-control": `public, max-age=${maxAge}` } : {}), ...cors },
+});
+
+// ---------- PriceCharting 长期价格（月度，最早到 2020 年底） ----------
+// 注意 accept 只能要网页：带上 application/json 时，PriceCharting 会直接回 JSON 搜索结果，不会跳到卡片页面
+const PC_HEADERS = { ...BROWSER_HEADERS, accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" };
+async function pcHistory(q, n, ctx, cors) {
+  const cache = caches.default;
+  const key = new Request(`https://ptcg-cache.local/pc2?q=${encodeURIComponent(q.toLowerCase())}&n=${n}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  try {
+    let r = await fetch(`https://www.pricecharting.com/search-products?q=${encodeURIComponent(q)}&type=prices`, { headers: PC_HEADERS, redirect: "follow" });
+    let html = await r.text(), url = r.url;
+    // 取不到时带回状态码和网页标题，方便判断是不是被拦了
+    const why = () => ({ status: r.status, page: (html.match(/<title>([^<]*)<\/title>/i) || [])[1] || "", url: String(url).split("?")[0] });
+    if (!html.includes("VGPC.chart_data")) {
+      // 搜索结果是列表：挑网址以编号结尾、又带卡名第一个词的那条
+      const links = [...new Set([...html.matchAll(/href="(https:\/\/www\.pricecharting\.com\/game\/[^"#?]+)"/g)].map((m) => m[1]))];
+      const word = q.toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9]/g, "");
+      const pick = links.find((l) => (!n || new RegExp(`-${parseInt(n, 10)}$`).test(l)) && l.toLowerCase().includes(word)) || (n ? null : links[0]);
+      if (!pick) return jsonResp({ points: [], ...why() }, cors);
+      url = pick;
+      r = await fetch(url, { headers: PC_HEADERS });
+      html = await r.text();
+    }
+    const i = html.indexOf("VGPC.chart_data");
+    if (i < 0) return jsonResp({ points: [], ...why() }, cors);
+    // 搜索直接跳到了卡片页：编号要对得上
+    if (n && !new RegExp(`-${parseInt(n, 10)}$`).test(String(url).split("?")[0])) return jsonResp({ points: [], ...why() }, cors);
+    const s = html.indexOf("{", i), e = html.indexOf("};", s);
+    const data = JSON.parse(html.slice(s, e + 1));
+    const t = html.indexOf('id="product_name"');
+    const title = t > 0 ? html.slice(html.indexOf(">", t) + 1, html.indexOf("</h1>", t)).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) : "";
+    // used = 裸卡（Ungraded），单位是美分
+    const points = (data.used || []).filter((x) => x[1] > 0).map(([ts, c]) => ({ d: new Date(ts).toISOString().slice(0, 10), p: c / 100, q: 0 }));
+    // 现在的裸卡价和卡图（简中卡没有别的价格来源，直接用这里的）
+    const u = html.indexOf('id="used_price"');
+    const pm = u > 0 && html.slice(u, u + 400).match(/\$([\d,]+\.\d\d)/);
+    const price = pm ? parseFloat(pm[1].replace(/,/g, "")) : null;
+    const im = html.match(/https:\/\/storage\.googleapis\.com\/images\.pricecharting\.com\/[a-z0-9]+\/240\.jpg/);
+    const resp = jsonResp({ at: Date.now(), url: url.split("?")[0], title, price, img: im ? im[0] : "", points }, cors, 200, 21600);
+    ctx.waitUntil(cache.put(key, resp.clone()));
+    return resp;
+  } catch (e) {
+    return jsonResp({ error: "pricecharting unreachable" }, cors, 502);
+  }
+}
+
+// ---------- KV：Worker 每天自己记的价格 ----------
+// tracked = 登记的商品 id（按登记顺序，只增不减）；每 40 个一组存在 h:组号 里：{ id: [[日期, 价格], …] }
+const CHUNK = 40;
+async function track(request, env, cors) {
+  if (!env.KV) return jsonResp({ error: "KV 未绑定（Settings → Bindings → KV namespace，变量名 KV）" }, cors, 501);
+  let ids = [];
+  try { ids = ((await request.json()).ids || []).map((x) => parseInt(x, 10)).filter((x) => x > 0).slice(0, 3000); } catch {}
+  const tracked = (await env.KV.get("tracked", "json")) || [];
+  const set = new Set(tracked), add = ids.filter((id) => !set.has(id));
+  if (add.length) { tracked.push(...add); await env.KV.put("tracked", JSON.stringify(tracked.slice(0, 5000))); }
+  return jsonResp({ ok: true, count: tracked.length, added: add.length }, cors);
+}
+async function kvHistory(id, env, cors) {
+  if (!env.KV) return jsonResp({ points: [] }, cors);
+  const tracked = (await env.KV.get("tracked", "json")) || [];
+  const pos = tracked.indexOf(parseInt(id, 10));
+  if (pos < 0) return jsonResp({ points: [] }, cors);
+  const hist = (await env.KV.get("h:" + Math.floor(pos / CHUNK), "json")) || {};
+  return jsonResp({ points: (hist[id] || []).map(([d, p]) => ({ d, p, q: 0 })) }, cors);
+}
+async function snapshot(env) {
+  if (!env.KV) return;
+  const tracked = (await env.KV.get("tracked", "json")) || [];
+  const today = new Date().toISOString().slice(0, 10);
+  const state = (await env.KV.get("cron", "json")) || { day: "", next: 0 };
+  if (state.day !== today) { state.day = today; state.next = 0; }
+  const b = state.next;
+  if (b * CHUNK >= tracked.length) return; // 今天这一轮已经全部记完
+  const key = "h:" + b, hist = (await env.KV.get(key, "json")) || {};
+  for (const id of tracked.slice(b * CHUNK, b * CHUNK + CHUNK)) {
+    try {
+      const arr = await (await fetch(`https://mpapi.tcgplayer.com/v2/product/${id}/pricepoints`, { headers: BROWSER_HEADERS })).json();
+      const prices = (arr || []).map((x) => x.marketPrice).filter((p) => p > 0);
+      if (!prices.length) continue;
+      const p = Math.max(...prices); // 有普通 / 闪两种时取有成交的那个（一般是闪卡）
+      const h = hist[id] || (hist[id] = []);
+      if (h.length && h[h.length - 1][0] === today) h[h.length - 1][1] = p; else h.push([today, p]);
+      if (h.length > 4000) h.shift(); // 最多留约 10 年
+    } catch {}
+  }
+  await env.KV.put(key, JSON.stringify(hist));
+  state.next = b + 1;
+  await env.KV.put("cron", JSON.stringify(state));
+}
+
+async function priceHistory(id, range, ctx, cors) {
+  range = ["month", "quarter", "annual"].includes(range) ? range : "quarter";
+  const cache = caches.default;
+  const key = new Request(`https://ptcg-cache.local/hist?id=${id}&r=${range}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  let points = [], variant = "", status = 0;
+  try {
+    // 带上和浏览器一样的请求头，不然容易被当成机器人拦下
+    const r = await fetch(`https://infinite-api.tcgplayer.com/price/history/${id}?range=${range}`, {
+      headers: { ...BROWSER_HEADERS, accept: "application/json, text/plain, */*", origin: "https://www.tcgplayer.com", referer: "https://www.tcgplayer.com/" },
+    });
+    status = r.status;
+    if (!r.ok) throw new Error("status " + r.status);
+    const j = await r.json();
+    const rows = (j && j.result) || [];
+    // 一个商品可能有普通 / 闪等几种版本：取成交量最大的那种
+    const vol = {};
+    for (const r of rows) for (const v of r.variants || []) vol[v.variant] = (vol[v.variant] || 0) + (parseInt(v.quantity, 10) || 0) + 0.001;
+    variant = Object.keys(vol).sort((a, b) => vol[b] - vol[a])[0] || "";
+    for (const r of rows) {
+      const v = (r.variants || []).find((x) => x.variant === variant);
+      const p = v && parseFloat(v.marketPrice);
+      if (p > 0) points.push({ d: r.date, p, q: parseInt(v.quantity, 10) || 0 });
+    }
+    points.sort((a, b) => (a.d < b.d ? -1 : 1));
+  } catch (e) {
+    // 把 TCGplayer 返回的状态码带回来，方便判断是不是被拦了（403 = 被拦）
+    return new Response(JSON.stringify({ error: "tcgplayer unreachable", status }), { status: 502, headers: { "content-type": "application/json", ...cors } });
+  }
+  const resp = new Response(JSON.stringify({ at: Date.now(), variant, points }), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=21600", ...cors },
+  });
+  ctx.waitUntil(cache.put(key, resp.clone()));
+  return resp;
+}
+
+const VISION_MODEL ="@cf/meta/llama-3.2-11b-vision-instruct";
+const READ_PROMPT =
+  "This image shows the bottom-left corner of a Pokemon trading card. Read the small printed line that contains the set code " +
+  "(often inside a dark box, e.g. M6, m1L, SV8a, sv2a, CSV8C, or MEP EN / PAF EN for English cards), an optional single letter F right after the code, " +
+  "and the card number (e.g. 085/076, 236/187, or just 070 for promos). Reply with ONLY those tokens separated by spaces, for example: " +
+  "'M6 085/076' or 'SV8a F 236/187' or 'PAF EN 232/091' or 'MEP EN 070'. Ignore the regulation mark letter before the code and the rarity after the number. " +
+  "If you cannot read it, reply NONE.";
+
+async function readCard(request, env, cors) {
+  const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json", ...cors } });
+  if (!env.AI) return json({ error: "Workers AI 未绑定（Settings → Bindings → Workers AI，变量名 AI）" }, 501);
+  let bytes;
+  try {
+    const { image } = await request.json();
+    const bin = atob(String(image || "").replace(/^data:image\/\w+;base64,/, ""));
+    if (!bin.length || bin.length > 400000) return json({ error: "image too large or empty" }, 400);
+    bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  } catch { return json({ error: "bad request" }, 400); }
+  const run = () => env.AI.run(VISION_MODEL, { messages: [{ role: "user", content: READ_PROMPT }], image: [...bytes], max_tokens: 24, temperature: 0 });
+  try {
+    let out;
+    try { out = await run(); }
+    catch (e) {
+      // 第一次用 Llama 3.2 Vision 要先同意 Meta 的许可协议
+      if (/agree/i.test(String(e && e.message || e))) { await env.AI.run(VISION_MODEL, { prompt: "agree" }); out = await run(); }
+      else throw e;
+    }
+    return json({ text: String((out && (out.response || out.result || out.text)) || "").trim().slice(0, 80) });
+  } catch (e) {
+    return json({ error: "ai failed: " + String(e && e.message || e).slice(0, 120) }, 502);
+  }
+}
 
 async function listSet(set, line, ctx, cors) {
   const cache = caches.default;
