@@ -212,12 +212,14 @@ async function priceHistory(id, range, ctx, cors) {
 }
 
 const VISION_MODEL ="@cf/meta/llama-3.2-11b-vision-instruct";
+// 不给具体的代码例子：AI 看不清时会照抄例子（把 s5R 读成例子里的「SV8a F」），所以只用占位符说明格式
 const READ_PROMPT =
-  "This image shows the bottom-left corner of a Pokemon trading card. Read the small printed line that contains the set code " +
-  "(often inside a dark box, e.g. M6, m1L, SV8a, sv2a, CSV8C, or MEP EN / PAF EN for English cards), an optional single letter F right after the code, " +
-  "and the card number (e.g. 085/076, 236/187, or just 070 for promos). Reply with ONLY those tokens separated by spaces, for example: " +
-  "'M6 085/076' or 'SV8a F 236/187' or 'PAF EN 232/091' or 'MEP EN 070'. Ignore the regulation mark letter before the code and the rarity after the number. " +
-  "If you cannot read it, reply NONE.";
+  "This image shows the bottom part of a Pokemon trading card. Find the small printed line near the bottom-left with the set code " +
+  "(a short code, often inside a small dark box) and the card number (digits, usually written as NNN/NNN). " +
+  "Copy exactly the characters you can actually see, in this format: <SETCODE> <NUMBER>. " +
+  "Only include the letters EN or F after the set code if they are clearly printed there. " +
+  "If you cannot read the set code clearly, reply with only the number. Do not guess or invent characters. " +
+  "Ignore the single regulation letter before the code and the rarity letters after the number. If you cannot read the number, reply NONE.";
 
 async function readCard(request, env, cors) {
   const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json", ...cors } });
