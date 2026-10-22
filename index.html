@@ -399,7 +399,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.22d · 1 秒出结果";
+const APP_VERSION = "10.22e · 后台确认";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
@@ -1449,6 +1449,7 @@ function renderCard(c, choosable) {
   if (choosable) {
     const b = document.createElement("button"); b.className = "btn small"; b.textContent = "就是这张";
     b.onclick = () => {
+      cancelBg(); // 你自己选了：后台不用再读
       $("results").querySelectorAll(".card, [data-retry]").forEach((x) => x !== el && x.remove());
       setStatus(`已选定 <b>${LANGS[c.lang]}</b>`);
       b.remove(); autoSave(c, el); offerSwitch(c, el);
@@ -1572,19 +1573,28 @@ const FRAME_VARIANTS = [
 
 // 取相机画面里引导框底部编号那一行（留出上下余量，卡歪一点也框得住）
 function grabStrip(variant) {
+  const g = guideGeom();
+  return g && stripFrom($("video"), g, variant);
+}
+// 引导框在相机画面（视频原始像素）里的位置
+function guideGeom() {
   const v = $("video"), vf = $("vf"), g = $("guide");
   const vw = v.videoWidth, vh = v.videoHeight; if (!vw) return null;
   const box = vf.getBoundingClientRect(), gb = g.getBoundingClientRect();
   const s = Math.max(box.width / vw, box.height / vh); // object-fit: cover 的换算
   const ox = (vw * s - box.width) / 2, oy = (vh * s - box.height) / 2;
-  const gx = (gb.left - box.left + ox) / s, gy = (gb.top - box.top + oy) / s, gw = gb.width / s, gh = gb.height / s;
+  return { gx: (gb.left - box.left + ox) / s, gy: (gb.top - box.top + oy) / s, gw: gb.width / s, gh: gb.height / s };
+}
+// 从画面（相机 / 存下的帧 / 照片）里按卡片位置截卡底那一行
+function stripFrom(src, { gx, gy, gw, gh }, variant) {
   const dy = (variant.dy || 0) * gh;
-  if (variant.left) return prep(v, gx - gw * 0.05, gy + gh * 0.865 + dy, gw * 0.7, gh * 0.14, { target: 1600, ...variant });
-  return prep(v, gx - gw * 0.05, gy + gh * 0.84 + dy, gw * 1.1, gh * 0.19, { target: 1400, ...variant });
+  if (variant.left) return prep(src, gx - gw * 0.05, gy + gh * 0.865 + dy, gw * 0.7, gh * 0.14, { target: 1600, ...variant });
+  return prep(src, gx - gw * 0.05, gy + gh * 0.84 + dy, gw * 1.1, gh * 0.19, { target: 1400, ...variant });
 }
 
 // opts.noGuess：上次列出来的卡都不是，这次不用整卡比对，只用读字的方法认
 async function startScan(opts = {}) {
+  cancelBg();
   if (!hasLiveCam) { $("shootIn").click(); return; }
   if (!stream && !(await openCam())) return;
   $("preview").hidden = true;
@@ -1638,8 +1648,12 @@ async function startScan(opts = {}) {
     let last = null, lastAny = null, k = 0, fam = null, famSince = 0, firstAt = 0;
     const accept = async (r, pick) => {
       loopId++; // 先停住读字的循环
-      await visShow(r, true, recent.slice(), pick, pick.sure ? null : () => startScan({ noGuess: true }));
+      // 要你选的时候：先存几帧画面再关相机，候选马上列出来，后台接着读卡底，读出来自动选好
+      const shots = pick.sure ? [] : await snapFrames();
+      const hints = recent.slice();
+      await visShow(r, true, hints, pick, pick.sure ? null : () => startScan({ noGuess: true }));
       finishScan();
+      if (shots.length && r.shown && r.shown.length > 1) bgResolve(shots, r.shown, hints);
     };
     while (scanning && my === loopId) {
       if (fam) {
@@ -1921,12 +1935,17 @@ function loadVis() {
         vis.loadModel((p) => { if (p.status === "progress" && p.total > 1e6) { prog[p.file] = [p.loaded, p.total]; show(); } }),
         vis.loadIndex("./vis/", (got, total) => { prog.index = [got, total || got]; show(); }),
       ]);
+      // 先空算一次：显卡第一次算要编译，放在这里做，真正扫描时就快了
+      await vis.embed(document.createElement("canvas")).catch(() => {});
       visIndex = idx; peek.hidden = true;
+      store.set("ptcg.visOk", 1);
       return true;
     })().catch((e) => { console.warn("整卡识别不可用：", e); visLoading = null; peek.hidden = true; return false; });
   }
   return visLoading;
 }
+// 打开网页就在后台把读字引擎准备好；用过整卡识别（模型已经存在手机里）的也一起准备，第一次扫描不用等
+setTimeout(() => { getWorker().catch(() => {}); if (store.get("ptcg.visOk", 0)) loadVis(); }, 1200);
 // 卡名去掉 TCGplayer 加在后面的编号（「Pikachu - 120/SV-P」「Slowpoke - 086 (Cosmos Holo)」），括号里的版本说明留着
 const cleanTpName = (s) => String(s || "").replace(/\s+-\s+[\w/-]*\d[\w/-]*(?=\s*\(|\s*$)/, "").trim();
 const visItem = (i) => { const it = visIndex.meta.items[i], s = visIndex.meta.sets[it[1]]; return { id: it[0], set: s[0], line: s[1] === "en" ? "pokemon" : "pokemon-japan", number: it[2], name: cleanTpName(it[3]), rarity: it[4], rel: it[5] }; };
@@ -1951,21 +1970,24 @@ async function visDecide(canvas) {
 function visPick(r, hints = []) {
   const fam = r.family;
   if (fam.length === 1) return { list: fam, sure: true };
-  const nums = hints.flatMap((p) => p.nums || []), en = hints.some((p) => p.en);
+  const nums = hints.flatMap((p) => p.nums || []), en = hints.some((p) => p.en && p.nums.length);
   const tokens = new Set(hints.flatMap((p) => p.tokens || []));
   const totals = new Set(hints.flatMap((p) => p.totalHints || []));
+  // EN 只在同时读到编号时才算（乱码里常冒出「EN」）；至少要有编号 / 总数 / 系列代码对上
   const score = (t) => {
     const [a, b] = String(t.p.number).split("/").map((x) => parseInt(x, 10));
-    let s = 0;
-    if (nums.some((x) => x.n === a)) s += 2;
-    if (b && (nums.some((x) => x.total === b) || totals.has(b))) s += 1;
+    let s = 0, strong = false;
+    const m = nums.find((x) => x.n === a);
+    if (m && m.total && b && m.total !== b) s -= 1; // 编号对上、总数不对：多半是别的版本
+    else if (m) { s += 2; strong = true; }
+    if (b && (nums.some((x) => x.total === b) || totals.has(b))) { s += 1; strong = true; }
     if (en && t.p.line === "pokemon") s += 1.5;
     const code = String(t.p.set).split(":")[0].toUpperCase();
-    if (t.p.line === "pokemon-japan" && tokens.has(code)) s += 1.5;
-    return s;
+    if (t.p.line === "pokemon-japan" && tokens.has(code)) { s += 1.5; strong = true; }
+    return { s, strong };
   };
-  const sc = fam.map((t) => ({ t, s: score(t) })).sort((x, y) => y.s - x.s || y.t.sim - x.t.sim);
-  if (sc[0].s >= 1 && (sc.length < 2 || sc[0].s > sc[1].s)) return { list: [sc[0].t], sure: true, byText: true };
+  const sc = fam.map((t) => ({ t, ...score(t) })).sort((x, y) => y.s - x.s || y.t.sim - x.t.sim);
+  if (sc[0].strong && sc[0].s >= 1 && (sc.length < 2 || sc[0].s > sc[1].s)) return { list: [sc[0].t], sure: true, byText: true };
   if (fam[0].sim - fam[1].sim >= 0.04) return { list: [fam[0]], sure: true };
   return { list: fam.slice(0, 4), sure: false };
 }
@@ -1975,6 +1997,109 @@ const visGuess = (r, max = 4) => {
   for (const t of r.top) { const k = baseName(t.p.name); if (seen.has(k)) continue; seen.add(k); list.push(t); if (list.length >= max) break; }
   return { list, sure: false, guess: true };
 };
+// ---------- 列出候选以后：用存下的画面在后台继续读卡底，读出来就自动帮你选好 ----------
+// 不用一直举着手机，也不用自己挑；你先点了、或者开始扫下一张，后台就停
+let bgToken = 0;
+const cancelBg = () => { bgToken++; $("visPeek").hidden = true; };
+// 存几帧相机画面（连同引导框位置），相机关掉以后还能接着读
+async function snapFrames(n = 3, gap = 80) {
+  const v = $("video"), g = guideGeom(), out = [];
+  if (!g) return out;
+  for (let i = 0; i < n; i++) {
+    const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0); out.push({ c, g });
+    if (i < n - 1) await sleep(gap);
+  }
+  return out;
+}
+// 按读到的卡底文字给候选打分（每读到一次就加一次分）：编号 +2、总数 +1、EN +1.5、日版系列代码 +1.5；
+// 第一名至少 2 分、比第二名多 1 分以上，而且要有编号 / 总数 / 系列代码对上（乱码里常冒出「EN」两个字母，光凭它不算）
+function pickByText(list, hints) {
+  const strong = list.map(() => false);
+  const sc = list.map((c, i) => {
+    let s = 0;
+    const n = parseInt(c.localId, 10), code = String(c.setId || "").toUpperCase();
+    for (const p of hints) {
+      // 编号对上但读到的总数不一样（简中 151C 145/151 ≠ 美版 145/165）：多半是别的版本，扣分
+      const m = p.nums.find((x) => x.n === n);
+      if (m && m.total && c.official && m.total !== c.official) s -= 1;
+      else if (m) { s += 2; strong[i] = true; }
+      if (c.official && (p.nums.some((x) => x.total === c.official) || (p.totalHints || []).includes(c.official))) { s += 1; strong[i] = true; }
+      if (p.en && p.nums.length && c.lang === "en") s += 1.5;
+      if (c.lang !== "en" && code && p.tokens.includes(code)) { s += 1.5; strong[i] = true; }
+    }
+    return s;
+  });
+  const order = sc.map((s, i) => i).sort((a, b) => sc[b] - sc[a]);
+  const top = order[0];
+  return strong[top] && sc[top] >= 2 && (order.length < 2 || sc[top] - sc[order[1]] >= 1) ? top : -1;
+}
+async function bgResolve(shots, list, hints = []) {
+  const my = ++bgToken, box = $("results");
+  const els = [...box.querySelectorAll(":scope > .card")];
+  const peek = (s) => { if (my === bgToken) { $("visPeek").hidden = false; $("visPeek").textContent = s; } };
+  const choose = (i, why) => {
+    bgToken++; $("visPeek").hidden = true;
+    const b = [...els[i].querySelectorAll("button")].find((x) => x.textContent === "就是这张");
+    if (b) b.click();
+    $("status").insertAdjacentHTML("beforeend", ` · ${why}`);
+  };
+  if (!shots.length || !els.length) return;
+  peek("正在后台读卡底，读出来会自动帮你选好（也可以直接点）…");
+  const seen = [], reads = new Map();
+  // 读到简中代码：简中卡和日版同图，换成简中（之前已经读到的文字也先查一遍）
+  const zhcn = async (p) => {
+    if (!p.nums.length || !p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t))) return false;
+    const cands = await identify(p).catch(() => []);
+    if (my !== bgToken || cands.length !== 1) return my !== bgToken;
+    bgToken++; $("visPeek").hidden = true;
+    await showResults(p, false, cands); $("status").insertAdjacentHTML("beforeend", " · 后台读到简中代码");
+    return true;
+  };
+  for (const p of hints) { if (await zhcn(p)) return; seen.push(p); }
+  // 同时把卡底截图交给 AI 读（走网络，和下面的读字引擎并行），谁先读出来用谁
+  const ai = proxyUrl() && !aiDisabled ? (async () => {
+    const s = shots[0], { gx, gy, gw, gh } = s.g, W = s.c.naturalWidth || s.c.width, H = s.c.naturalHeight || s.c.height;
+    const sx = Math.max(0, gx - gw * 0.08), sy = Math.max(0, gy + gh * 0.7), sw = Math.min(W - sx, gw * 1.16), sh = Math.min(H - sy, gh * 0.36);
+    const crop = document.createElement("canvas"); crop.width = Math.round(sw); crop.height = Math.round(sh);
+    crop.getContext("2d").drawImage(s.c, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+    const text = await aiRead(crop, 1024);
+    if (!text || my !== bgToken) return;
+    const p = parseText(text, true);
+    if (await zhcn(p)) return;
+    seen.push(p);
+    const i = pickByText(list, seen);
+    if (i >= 0) choose(i, `后台 AI 读卡底确认（${esc(text.slice(0, 30))}）`);
+  })().catch(() => {}) : null;
+  for (const variant of FRAME_VARIANTS.slice(0, 8)) for (const s of shots) {
+    if (my !== bgToken) return;
+    let p;
+    try { p = parseText((await ocrWords(stripFrom(s.c, s.g, variant))).text); } catch { continue; }
+    if (my !== bgToken) return;
+    if (await zhcn(p)) return;
+    seen.push(p);
+    const i = pickByText(list, seen);
+    if (i >= 0) return choose(i, `后台读卡底确认（读到 ${esc(p.raw.slice(0, 24))}）`);
+    // 同一个编号读到两次、候选里却没有：可能列错了，按读到的编号查，查到唯一一张就加到最上面
+    if (p.nums.length) {
+      const key = numsLabel(p), cnt = (reads.get(key) || 0) + 1;
+      reads.set(key, cnt);
+      if (cnt === 2) {
+        const cands = await identify(p).catch(() => []);
+        if (my !== bgToken) return;
+        const c = cands.length === 1 && cands[0];
+        if (c && !c.manual && !list.some((x) => x.id === c.id && x.lang === c.lang)) {
+          c._first = c; c._exact = true;
+          const el = mountCard(c, true, box); box.prepend(el);
+          list.unshift(c); els.unshift(el);
+          peek(`卡底读到 ${key}，放在最上面了`);
+        }
+      }
+    }
+  }
+  if (ai) await ai; // AI 还没回来就等它
+  peek("后台没读出卡底，请点你手上那张");
+}
 // 认出来了：显示结果（hints = 同时读到的卡底文字，用来挑版本、分辨繁中）
 // retry：列出来的都不是时，点「都不是」要做的事（继续扫描 / 用读字的方法再认）
 async function visShow(r, auto, hints = [], pick = visPick(r, hints), retry = null) {
@@ -2001,9 +2126,10 @@ async function visShow(r, auto, hints = [], pick = visPick(r, hints), retry = nu
   });
   if (retry && list.length > 1) {
     const b = document.createElement("button"); b.className = "btn small"; b.textContent = "都不是，继续识别"; b.dataset.retry = 1;
-    b.onclick = retry;
+    b.onclick = () => { cancelBg(); retry(); };
     $("results").appendChild(b);
   }
+  r.shown = list; // 列出来的卡，后台读卡底时用
   return res;
 }
 // 相机：取引导框里的卡片（交替用框本身和稍微往里缩一点，卡比框小一点也对得上）
@@ -2046,7 +2172,8 @@ async function visPhoto(img) {
   const step = t.ch * 0.06;
   for (const [ds, dx, dy] of [[0.93, 0, 0], [1.07, 0, 0], [1, -1, 0], [1, 1, 0], [1, 0, -1], [1, 0, 1]])
     await run({ cx: t.cx + dx * step, cy: t.cy + dy * step, ch: t.ch * ds });
-  return { ...best.r, parsed: await reading };
+  const b = best.t, bw = b.ch * R;
+  return { ...best.r, parsed: await reading, geom: { gx: b.cx - bw / 2, gy: b.cy - b.ch / 2, gw: bw, gh: b.ch } };
 }
 
 // 整个系列比对找到的卡：显示结果并注明。
@@ -2079,6 +2206,7 @@ async function showPicked(parsed, ir) {
 // quiet=true：从相机兜底调用，什么都没找到时不显示「没找到」，回去继续扫
 // opts.skipVis：整卡比对列出来的都不是，这次只用读字的方法
 async function scanFromImage(img, quiet, opts = {}) {
+  if (!quiet) cancelBg();
   const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
   await getWorker();
   // 先整卡比对（相机兜底调用时，整卡比对已经在相机那边跑过了）：认出来就显示；拿不准也先列出最像的几张，都不是再用读字的方法
@@ -2087,8 +2215,12 @@ async function scanFromImage(img, quiet, opts = {}) {
     const r = await visPhoto(img).catch(() => null);
     const p = r && r.parsed, zhcn = p && p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t));
     const retry = () => { $("results").innerHTML = ""; scanFromImage(img, false, { skipVis: true }).catch((e) => setStatus("识别失败：" + esc(e.message))); };
-    if (r && !zhcn && r.ok) return visShow(r, false, p ? [p] : [], undefined, retry);
-    if (r && !zhcn && r.best.sim >= 0.6) return visShow(r, false, p ? [p] : [], visGuess(r), retry);
+    if (r && !zhcn && (r.ok || r.best.sim >= 0.6)) {
+      const res = await visShow(r, false, p ? [p] : [], r.ok ? undefined : visGuess(r), retry);
+      // 列出了几张：后台接着在照片上多读几种卡底处理方式，读出来自动选好
+      if (r.shown && r.shown.length > 1) bgResolve([{ c: img, g: r.geom }], r.shown, p ? [p] : []);
+      return res;
+    }
   }
   const bands = [];
   for (let y0 = 0.36; y0 <= 0.86; y0 += 0.07) bands.push(y0);
@@ -2226,6 +2358,7 @@ $("pickIn").onchange = onPhoto;
 $("manualForm").onsubmit = async (e) => {
   e.preventDefault();
   const s = $("manualIn").value.trim(); if (!s) return;
+  cancelBg();
   // 查询后清空输入框，并收起键盘，方便输入下一张
   $("manualIn").value = ""; $("manualIn").blur();
   if (scanning) { scanning = false; loopId++; setScanUI(stream ? "found" : "idle"); }
