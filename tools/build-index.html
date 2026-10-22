@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>建卡图库</title>
+<style>body{font:14px system-ui;margin:20px} #log{white-space:pre-wrap;font:12px monospace}</style>
+<h3>建卡图库（本地用：serve.ps1 打开 http://localhost:8765/tools/build-index.html）</h3>
+<p>读 tools/catalog.json，逐张下载 TCGplayer 卡图算特征，结果存成 tools/vec.bin + tools/meta.json（中途断了重开会接着算）。</p>
+<button id="go">开始</button> <span id="st"></span>
+<div id="log"></div>
+<script type="module">
+import { loadModel, cardCanvas, embed, quantize } from "../vis.js";
+const $ = (id) => document.getElementById(id), log = (s) => ($("log").textContent = s + "\n" + $("log").textContent.slice(0, 4000));
+const save = async (name, body) => {
+  const r = await fetch("/save?name=" + name, { method: "POST", body });
+  if (!r.ok) { log("保存失败：" + name + " HTTP " + r.status); throw new Error("save " + name); }
+};
+// 图片偶尔会一直下载不完，15 秒没好就放弃，免得整个流程卡住
+const loadImg = (u) => new Promise((res, rej) => {
+  const i = new Image(), t = setTimeout(() => { i.src = ""; rej(u); }, 15000);
+  i.crossOrigin = "anonymous"; i.onload = () => { clearTimeout(t); res(i); }; i.onerror = () => { clearTimeout(t); rej(u); }; i.src = u;
+});
+async function build() {
+  $("go").disabled = true;
+  const cat = await (await fetch("catalog.json", { cache: "no-cache" })).json();
+  const m = await loadModel((p) => p.status === "progress" && ($("st").textContent = `模型 ${Math.round(p.progress)}%`));
+  log(`模型：${m.device}；目录 ${cat.length} 张`);
+  // 接着上次的进度
+  let sets = [], setIdx = new Map(), items = [], chunks = [];
+  try {
+    const old = await (await fetch("meta.json", { cache: "no-cache" })).json();
+    const buf = new Int8Array(await (await fetch("vec.bin", { cache: "no-cache" })).arrayBuffer());
+    if (old.D === 384 && buf.length === old.items.length * 384) {
+      sets = old.sets; sets.forEach((s, i) => setIdx.set(s[1] + "|" + s[0], i)); items = old.items; chunks = [buf];
+      log(`接着上次：已有 ${items.length} 张`);
+    }
+  } catch {}
+  const done = new Set(items.map((x) => x[0]));
+  const todo = cat.filter((c) => !done.has(c.id) && (done.add(c.id), true)); // 同一个商品可能出现两次，只算一次
+  const failed = [];
+  // 先并行下载图片（8 路），算特征一张一张来
+  const q = todo.slice(), ready = new Map();
+  const loader = async () => {
+    while (q.length) {
+      const c = q.shift();
+      let im = null;
+      for (const u of [`https://tcgplayer-cdn.tcgplayer.com/product/${c.id}_200w.jpg`, `https://tcgplayer-cdn.tcgplayer.com/product/${c.id}_in_400x400.jpg`]) {
+        try { im = await loadImg(u); break; } catch {}
+      }
+      ready.set(c.id, im || false);
+      while (ready.size > 64) await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+  Array.from({ length: 8 }, loader);
+  let k = 0, fresh = [], t0 = performance.now();
+  const flush = async () => {
+    if (fresh.length) { chunks.push(Int8Array.from(fresh.flatMap((x) => Array.from(x)))); fresh = []; }
+    const all = new Int8Array(chunks.reduce((a, c) => a + c.length, 0)); let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
+    chunks = [all];
+    await save("vec.bin", all);
+    await save("meta.json", JSON.stringify({ model: "Xenova/dinov2-small fp16 cls", D: 384, built: new Date().toISOString().slice(0, 10), sets, items }));
+  };
+  for (const c of todo) {
+    while (!ready.has(c.id)) await new Promise((r) => setTimeout(r, 10));
+    const im = ready.get(c.id); ready.delete(c.id); k++;
+    if (!im) { failed.push(c.id); continue; }
+    const key = c.l + "|" + c.set;
+    if (!setIdx.has(key)) { setIdx.set(key, sets.length); sets.push([c.set, c.l]); }
+    const v = await embed(cardCanvas(im, 0, 0, im.naturalWidth, im.naturalHeight));
+    fresh.push(quantize(v));
+    items.push([c.id, setIdx.get(key), c.n, c.name.replace(/\s*-\s*[\w/]+$/, ""), c.r, c.rel || ""]);
+    if (k % 50 === 0) { const rate = k / ((performance.now() - t0) / 1000); $("st").textContent = `${k}/${todo.length}（${rate.toFixed(1)} 张/秒，还要约 ${Math.round((todo.length - k) / rate / 60)} 分钟）失败 ${failed.length}`; }
+    if (k % 2000 === 0) { await flush(); log(`已保存 ${items.length} 张`); }
+  }
+  await flush();
+  await save("failed.json", JSON.stringify(failed));
+  log(`完成：共 ${items.length} 张，没有卡图 ${failed.length} 张`);
+  $("st").textContent = "完成"; window.__buildDone = true;
+}
+$("go").onclick = build;
+window.__build = build;
+</script>
