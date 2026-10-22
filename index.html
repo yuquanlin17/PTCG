@@ -152,7 +152,7 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
 .chg { font-family: var(--mono); font-size: 13px; font-weight: 600; }
 .chg.up { color: var(--good); } .chg.down { color: var(--bad); } .chg.flat { color: var(--muted); }
 .ranges { display: inline-flex; background: var(--bg); border-radius: 10px; padding: 3px; gap: 2px; margin: 14px 0 8px; }
-.ranges button { border: 0; background: transparent; border-radius: 8px; padding: 5px 12px; font-size: 13px; color: var(--muted); }
+.ranges button { border: 0; background: transparent; border-radius: 8px; padding: 5px 9px; font-size: 13px; color: var(--muted); }
 .ranges button[aria-pressed="true"] { background: var(--surface); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 .chart { position: relative; width: 100%; height: 200px; touch-action: none; }
 .chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
@@ -264,9 +264,12 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
       <button class="sheet-close" id="shClose" aria-label="关闭">×</button>
     </div>
     <div class="ranges" role="group" aria-label="时间范围">
-      <button data-range="month">1 个月</button>
-      <button data-range="quarter">3 个月</button>
-      <button data-range="annual">1 年</button>
+      <button data-range="month">1月</button>
+      <button data-range="quarter">3月</button>
+      <button data-range="annual">1年</button>
+      <button data-range="y3">3年</button>
+      <button data-range="y5">5年</button>
+      <button data-range="all">全部</button>
     </div>
     <div class="chart" id="shChart"></div>
     <div class="stats">
@@ -414,7 +417,7 @@ async function tcgPrice(x) {
       p = items.find((i) => i.id === x.tpId);
       if (p) break;
     }
-    return p ? { usd: p.price, tpId: p.id, src: "TCGplayer", detail: `市价 · ${p.rarity || p.set}` } : { usd: null, tpId: x.tpId, src: "", detail: "" };
+    return p ? { usd: p.price, tpId: p.id, set: p.set, name: p.name, src: "TCGplayer", detail: `市价 · ${p.rarity || p.set}` } : { usd: null, tpId: x.tpId, src: "", detail: "" };
   }
   const code = String(x.setRef || x.setId || "");
   const n = parseInt(x.localId, 10);
@@ -436,7 +439,7 @@ async function tcgPrice(x) {
     // 同一张卡有普通版和限定版（名字带括号）时，先取普通版
     const ok = sameNum.filter(setOk).sort((a, b) => /\(/.test(a.name) - /\(/.test(b.name));
     const p = ok[0] || (sameNum.length === 1 ? sameNum[0] : null);
-    if (p) return { usd: p.price, tpId: p.id, set: p.set, src: "TCGplayer", detail: p.price != null ? `市价 · ${p.rarity || p.set}` : "暂无成交价" };
+    if (p) return { usd: p.price, tpId: p.id, set: p.set, name: p.name, src: "TCGplayer", detail: p.price != null ? `市价 · ${p.rarity || p.set}` : "暂无成交价" };
   }
   return { usd: null, tpId: null, src: "", detail: "" };
 }
@@ -1924,6 +1927,18 @@ async function refreshItem(it) {
   if (!it.added) it.added = it.at || Date.now(); // 旧收藏：用原来的时间当添加时间
   it.priceAt = Date.now();
 }
+// 把收藏卡登记给价格服务器，让它每天自己记一次价格（存在 Cloudflare KV，换手机也能看到历史）
+async function trackOnServer() {
+  const base = proxyUrl();
+  if (!base || /localhost|127\.0\.0\.1/.test(base)) return;
+  const ids = [...new Set(lib.map((x) => x.tpId).filter(Boolean))].sort((a, b) => a - b);
+  const sig = ids.join(",");
+  if (!ids.length || store.get("ptcg.tracked", "") === sig) return; // 没有新卡就不用再登记
+  try {
+    const r = await fetch(`${base}/track`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }) });
+    if (r.ok) store.set("ptcg.tracked", sig);
+  } catch {}
+}
 let refreshing = false;
 async function refreshAll(force, quiet) {
   if (refreshing) return;
@@ -1934,6 +1949,7 @@ async function refreshAll(force, quiet) {
   await loadFx();
   for (const it of lib) { try { await refreshItem(it); } catch {} }
   saveLib(); store.set("ptcg.lastRefresh", Date.now());
+  trackOnServer();
   refreshing = false; $("refreshBtn").disabled = false; $("refreshBtn").textContent = "刷新价格";
   if (!$("pageLib").hidden) renderLib();
   if (force && !quiet) toast("价格已更新");
@@ -1989,7 +2005,9 @@ $("thresholdIn").onchange = () => { const v = parseFloat($("thresholdIn").value)
 
 // ---------- 价格曲线：点任意一张卡打开 ----------
 let shCard = null, shRange = store.get("ptcg.range", "quarter"), shReq = 0;
-const RANGE_NOTE = { month: "近 1 个月（每天一个点）", quarter: "近 3 个月（每 3 天一个点）", annual: "近 1 年（每周一个点）" };
+const RANGE_NOTE = { month: "近 1 个月（每天一个点）", quarter: "近 3 个月（每 3 天一个点）", annual: "近 1 年（每周一个点）", y3: "近 3 年（每月一个点）", y5: "近 5 年（每月一个点）", all: "能查到的全部（每月一个点）" };
+const RANGE_DAYS = { month: 31, quarter: 92, annual: 366, y3: 1096, y5: 1827, all: 99999 };
+const LONG_RANGE = new Set(["y3", "y5", "all"]);
 function openHistory(x) {
   shCard = x;
   const im = cardImg(x); im.id = "shImg"; $("shImg").replaceWith(im);
@@ -2011,22 +2029,45 @@ async function loadHistory() {
   ["shHi", "shLo", "shVol"].forEach((id) => ($(id).textContent = "—"));
   $("shNote").textContent = "";
   let tp = x.tpId || (x.price && x.price.tpId);
-  if (!tp && x.lang !== "zh-cn") { try { const p = await priceFor(x); tp = p && p.tpId; if (tp) x.tpId = tp; } catch {} }
+  // 需要 TCGplayer 商品号（短期历史、KV）和英文卡名、系列名（PriceCharting 长期历史）
+  if ((!tp || !x.tpName) && x.lang !== "zh-cn") {
+    try { const p = await priceFor(x); if (p && p.tpId) { tp = p.tpId; x.tpId = tp; x.tpName = p.name || x.tpName; x.tpSet = p.set || x.tpSet; } } catch {}
+  }
   if (my !== shReq) return;
   const base = proxyUrl();
   if (!tp || !base) { chart.innerHTML = `<div class="msg">${x.lang === "zh-cn" ? "简中卡暂无价格数据" : "这张卡在 TCGplayer 上没有找到，暂无历史价格"}</div>`; return; }
-  let j = null;
-  try { j = await getJSON(`${base}?history=${tp}&range=${shRange}`, `hist.${tp}.${shRange}`, 6 * 3600e3); } catch {}
-  if (my !== shReq) return;
-  let pts = ((j && j.points) || []).filter((p) => p.p > 0), fromLocal = false;
-  // TCGplayer 的历史取不到时，用本机记下的价格（收藏里的卡每次刷新都会记）
-  if (pts.length < 2 && x.ph && x.ph.length >= 1 && x.price != null) {
-    const span = { month: 31, quarter: 92, annual: 366 }[shRange] * DAY, from = Date.now() - span;
-    const loc = x.ph.filter(([t]) => t >= from).map(([t, p]) => ({ d: new Date(t).toISOString().slice(0, 10), p, q: 0 }));
-    loc.push({ d: new Date().toISOString().slice(0, 10), p: x.price, q: 0 });
-    if (loc.length >= 2) { pts = loc; fromLocal = true; j = { variant: "" }; }
+  const from = new Date(Date.now() - RANGE_DAYS[shRange] * DAY).toISOString().slice(0, 10);
+  const inRange = (arr) => (arr || []).filter((p) => p.p > 0 && p.d >= from);
+  let pts = [], source = "", variant = "";
+  if (LONG_RANGE.has(shRange)) {
+    // 长期：PriceCharting 月度裸卡价（最早到 2020 年底）
+    const name = String(x.tpName || x.name).replace(/\s*-\s*\d+\/\d+.*$/, "").replace(/\s*\(.*?\)\s*/g, " ").trim();
+    const setEn = String(x.tpSet || x.setName || "").replace(/^[^:]*:\s*/, "");
+    const n = parseInt(x.localId, 10) || "";
+    const q = `${name} ${n} ${setEn}${x.lang === "ja" || x.lang === "zh-tw" ? " japanese" : ""}`.replace(/\s+/g, " ").trim();
+    try {
+      const j = await getJSON(`${base}?pc=${encodeURIComponent(q)}&n=${n}`, `pc.${q.toLowerCase()}`, 24 * 3600e3);
+      pts = inRange(j.points); if (pts.length >= 2) source = `PriceCharting 裸卡价${j.title ? "（" + j.title + "）" : ""}`;
+    } catch {}
+  } else {
+    try {
+      const j = await getJSON(`${base}?history=${tp}&range=${shRange}`, `hist.${tp}.${shRange}`, 6 * 3600e3);
+      pts = inRange(j.points); variant = j.variant || ""; if (pts.length >= 2) source = `TCGplayer 市价${variant ? " · " + variant : ""}`;
+    } catch {}
   }
-  if (pts.length < 2) { chart.innerHTML = `<div class="msg">${j ? "这段时间成交太少，画不出曲线" : "历史价格暂时取不到，请稍后再试"}</div>`; return; }
+  if (my !== shReq) return;
+  // 退一步：价格服务器每天记下的价格（KV）
+  if (pts.length < 2) {
+    try { const j = await getJSON(`${base}?kv=${tp}`, `kv.${tp}`, 3600e3); const k = inRange(j.points); if (k.length >= 2) { pts = k; source = "价格服务器每天记录的 TCGplayer 市价"; } } catch {}
+    if (my !== shReq) return;
+  }
+  // 再退一步：本机记下的价格（收藏里的卡每次刷新都会记）
+  if (pts.length < 2 && x.ph && x.ph.length >= 1 && x.price != null) {
+    const loc = inRange(x.ph.map(([t, p]) => ({ d: new Date(t).toISOString().slice(0, 10), p, q: 0 })));
+    loc.push({ d: new Date().toISOString().slice(0, 10), p: x.price, q: 0 });
+    if (loc.length >= 2) { pts = loc; source = "本机每次刷新记下的价格"; }
+  }
+  if (pts.length < 2) { chart.innerHTML = '<div class="msg">这段时间没有足够的价格记录，画不出曲线</div>'; return; }
   drawChart(chart, pts);
   const hi = Math.max(...pts.map((p) => p.p)), lo = Math.min(...pts.map((p) => p.p)), vol = pts.reduce((a, p) => a + (p.q || 0), 0);
   $("shHi").textContent = fmt(hi); $("shHi").dataset.usd = hi;
@@ -2036,9 +2077,8 @@ async function loadHistory() {
   const d = pts[pts.length - 1].p - pts[0].p, flat = Math.abs(d) < 0.005;
   $("shChg").textContent = flat ? `— ${fmt(0)}` : `${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))}`;
   $("shChg").className = "chg " + (flat ? "flat" : d > 0 ? "up" : "down");
-  $("shNote").textContent = fromLocal
-    ? "TCGplayer 的历史价格暂时取不到，这里画的是本机每次刷新记下的价格。"
-    : `TCGplayer 市价${j.variant ? " · " + j.variant : ""} · ${RANGE_NOTE[shRange]}。手指在图上滑动可以看每个点。`;
+  $("shNote").textContent = `${source} · ${RANGE_NOTE[shRange]}${shRange !== "all" && new Date(pts[0].d) - new Date(from) > 45 * DAY ? `（只查到 ${pts[0].d.slice(0, 7)} 以后的）` : ""}。手指在图上滑动可以看每个点。`;
+  $("shVol").parentElement.hidden = !pts.some((p) => p.q); // 长期数据没有成交量
 }
 // 单条曲线：2px 线 + 淡面积，弱化网格，标出最新一点；手指 / 鼠标滑动显示十字线和数值
 function drawChart(el, pts) {
@@ -2050,7 +2090,9 @@ function drawChart(el, pts) {
   const n = pts.length, X = (i) => padL + (i / (n - 1)) * (W - padL - padR), Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
   const c = CUR[cur];
   const short = (v) => c.sym + (v >= 10000 ? Math.round(v / 1000) + "k" : v >= 1000 ? (v / 1000).toFixed(1) + "k" : v.toFixed(c.dec && v < 100 ? 2 : 0));
-  const dl = (d) => d.slice(5).replace("-", "/");
+  // 跨度超过一年的按「年/月」标日期，否则按「月/日」
+  const long = new Date(pts[n - 1].d) - new Date(pts[0].d) > 400 * DAY;
+  const dl = (d) => (long ? d.slice(0, 7) : d.slice(5)).replace("-", "/");
   const ticks = [0, 1, 2, 3].map((k) => lo + ((hi - lo) * k) / 3);
   const line = vals.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
   const area = `${line}L${X(n - 1).toFixed(1)},${H - padB}L${X(0).toFixed(1)},${H - padB}Z`;
