@@ -466,7 +466,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.23b · AI 后台确认";
+const APP_VERSION = "10.23c · AI 防认错";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
@@ -729,10 +729,15 @@ function liveAiCrop() {
 }
 // AI 读到的文字 → 候选卡 → 用卡图核对；返回 { pick, list, parsed }
 async function resolveAiText(text, sigs) {
-  const parsed = parseText(text, true);
+  let parsed = parseText(text, true);
   if (!parsed.nums.length) return null;
+  // AI 常把简中 151 的「151C」读成别的 C…C 代码（照抄见过的例子）：总数是 151 就按 151C 查
+  const n151 = parsed.nums.find((x) => x.total === 151);
+  if (n151 && parsed.tokens.some((t) => /^C[A-Z0-9.]{2,}C$/.test(t))) parsed = parseText(`151C ${n151.n}/151`, true);
   const cands = await identify(parsed);
   if (!cands.length) return { parsed, list: [] };
+  // AI 读到没有资料的简中代码（只能手动登记）：多半是编的，不采用
+  if (cands.every((c) => c.manual)) return { parsed, list: [] };
   if (cands.length === 1) {
     const s = sigs.length ? await imageSim(cands[0], sigs) : null;
     // AI 读到系列代码 + 编号，证据很强；卡图明显不像时才去试形近编号
@@ -1727,6 +1732,15 @@ async function startScan(opts = {}) {
     $("ocrPeek").hidden = false; $("ocrPeek").textContent = "AI 读到：" + text;
     const res = await resolveAiText(text, liveCardSigs().concat(slideSigs($("video"), 0, true))).catch(() => null);
     if (my !== loopId) return true;
+    // 整卡比对核对一下：AI 编出来的代码会变成另一张卡（卡图对不上）
+    if (res && res.pick && visIndex && !(await visAgrees(res.pick, liveCardCanvas(0)))) { $("ocrPeek").textContent += "（和卡图对不上，不采用）"; return false; }
+    if (my !== loopId) return true;
+    if (res && res.list && res.list.length > 1 && visIndex) {
+      const ok = [];
+      for (const c of res.list) if (await visAgrees(c, liveCardCanvas(0))) ok.push(c);
+      if (my !== loopId) return true;
+      res.list = ok;
+    }
     if (res && res.pick) {
       await showResults(res.parsed, true, [res.pick]);
       $("status").insertAdjacentHTML("beforeend", ` · AI 读卡底：${esc(text)}`);
@@ -2089,6 +2103,25 @@ function visPick(r, hints = []) {
   if (fam[0].sim - fam[1].sim >= 0.04) return { list: [fam[0]], sure: true };
   return { list: fam.slice(0, 4), sure: false };
 }
+// 用整卡比对核对别的方法（AI 读卡底、读字）找到的卡：AI 看不清时会编代码（把 M1L 029/063 编成 SVP 029，变成别的卡）。
+// 这张卡在卡图库里：它的相似度不能比最像的那张低太多；不在库里（老卡、简中）：画面也不像库里任何一张时才信
+let visIdMap = null;
+async function visAgrees(c, canvas) {
+  if (!visIndex || !canvas) return true;
+  try {
+    if (!visIdMap) { visIdMap = new Map(); visIndex.meta.items.forEach((it, i) => visIdMap.set(it[0], i)); }
+    const q = await vis.embed(canvas), top5 = vis.search(visIndex, q, 5), top = top5[0];
+    // 简中 151 和日版 / 美版 151 同图：画面最像的几张里有 151 的卡就算对得上
+    if (c.lang === "zh-cn" && /^151C/i.test(c.setId)) return top5.some((t) => /^SV2a:|Scarlet & Violet 151/i.test(visItem(t.i).set));
+    let id = c.tpId;
+    if (!id && c.lang !== "zh-cn") { const p = await priceFor(c).catch(() => null); id = p && p.tpId; }
+    const i = id ? visIdMap.get(id) : undefined;
+    if (i === undefined) return top.sim < 0.65;
+    const { vecs, inv, D } = visIndex;
+    let s = 0; for (let j = 0, o = i * D; j < D; j++) s += q[j] * vecs[o + j];
+    return s * inv[i] >= top.sim - 0.1;
+  } catch { return true; }
+}
 // 拿不准是哪张卡时：每个卡名取最像的一个版本，列出最像的几张让你点
 const visGuess = (r, max = 4) => {
   const seen = new Set(), list = [];
@@ -2310,12 +2343,16 @@ async function scanFromImage(img, quiet, opts = {}) {
   const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
   await getWorker();
   // 先整卡比对（相机兜底调用时，整卡比对已经在相机那边跑过了）：认出来就显示；拿不准也先列出最像的几张，都不是再用读字的方法
-  if (!quiet && !opts.skipVis && (await loadVis())) {
+  // （「都不是」重试时也算一次，拿卡片位置核对后面 AI 读到的卡）
+  let photoGeom = null;
+  if (!quiet && (await loadVis())) {
     setStatus("整卡比对中…");
     const r = await visPhoto(img).catch(() => null);
+    photoGeom = r && r.geom;
+    if (opts.skipVis) setStatus("识别中…");
     const p = r && r.parsed, zhcn = p && p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t));
     const retry = () => { $("results").innerHTML = ""; scanFromImage(img, false, { skipVis: true }).catch((e) => setStatus("识别失败：" + esc(e.message))); };
-    if (r && !zhcn && (r.ok || r.best.sim >= 0.6)) {
+    if (!opts.skipVis && r && !zhcn && (r.ok || r.best.sim >= 0.6)) {
       const res = await visShow(r, false, p ? [p] : [], r.ok ? undefined : visGuess(r), retry);
       // 列出了几张：后台接着在照片上多读几种卡底处理方式，读出来自动选好
       if (r.shown && r.shown.length > 1) bgResolve([{ c: img, g: r.geom }], r.shown, p ? [p] : []);
@@ -2357,6 +2394,9 @@ async function scanFromImage(img, quiet, opts = {}) {
       if (text) {
         if (!slid.size) { slid.add(1); querySigs.push(...slideSigs(img, 0)); }
         const res = await resolveAiText(text, querySigs).catch(() => null);
+        // 整卡比对核对（用整卡比对找到的卡片位置截图）：AI 编出来的代码会变成另一张卡
+        const g = photoGeom, agree = (c) => !g || visAgrees(c, vis.cardCanvas(img, g.gx, g.gy, g.gw, g.gh));
+        if (res && res.pick && !(await agree(res.pick))) res.pick = null;
         if (res && res.pick) {
           const r = await showResults(res.parsed, false, [res.pick]);
           $("status").insertAdjacentHTML("beforeend", ` · AI 读卡底：${esc(text)}`);
@@ -2846,7 +2886,7 @@ renderFx();
 loadFx();
 getIndex();          // 预先加载四种语言的系列列表
 refreshAll(false);
-window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank, slideSigs, setImageSearch, setsFor, productSig, tcgSetList, resolveByImage, withLookalikes, resolveByName, namesFor, ocrName, nameScore, loadVis, visDecide, visPhoto, visShow, visPick, liveCardCanvas, get vis() { return vis; }, get visIndex() { return visIndex; } };
+window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank, slideSigs, setImageSearch, setsFor, productSig, tcgSetList, resolveByImage, withLookalikes, resolveByName, namesFor, ocrName, nameScore, loadVis, visDecide, visPhoto, visShow, visPick, liveCardCanvas, visAgrees, resolveAiText, get vis() { return vis; }, get visIndex() { return visIndex; } };
 </script>
 </body>
 </html>
