@@ -293,7 +293,7 @@ const REFRESH_MS = 60 * 60 * 1000; // 每小时刷新一次
 const EN_ABBR = { SVI: "sv01", SVE: "sve", SVP: "svp", PAL: "sv02", MCD23: "2023sv", OBF: "sv03", MEW: "sv03.5", MFB: "mfb",
   PAR: "sv04", PAF: "sv04.5", TEF: "sv05", TWM: "sv06", SFA: "sv06.5", SCR: "sv07", SSP: "sv08", MCD24: "2024sv", PRE: "sv08.5",
   JTG: "sv09", DRI: "sv10", BLK: "sv10.5b", WHT: "sv10.5w", MEE: "mee", MEG: "me01", MEP: "mep", PFL: "me02", ASC: "me02.5",
-  POR: "me03", CRI: "me04", PBL: "me05" };
+  POR: "me03", CRI: "me04", PBL: "me05", "30C": "30th" };
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -398,7 +398,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.22 · 简中151";
+const APP_VERSION = "10.22b · 简中151 + 30C";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
