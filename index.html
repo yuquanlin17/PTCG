@@ -190,6 +190,8 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
     <div class="sortrow">
       <label for="sortSel">排序</label>
       <select id="sortSel">
+        <option value="added-desc">添加时间 新 → 旧</option>
+        <option value="added-asc">添加时间 旧 → 新</option>
         <option value="price-desc">价格 高 → 低</option>
         <option value="price-asc">价格 低 → 高</option>
         <option value="set-new">版本 新 → 旧</option>
@@ -451,6 +453,50 @@ async function setImageSearch(sets, sigs, onProgress) {
   const ok = best.sim >= 0.8 && (!second || best.sim - second.sim >= 0.05);
   return { ok, best, second, scored };
 }
+// ---------- AI 读卡底：网页自带的识别读不出来时（白字描边、花背景），交给价格服务器上的看图模型 ----------
+let aiDisabled = false; // 服务器没开 AI 时不再反复请求
+async function aiRead(canvas, maxW = 720) {
+  const base = proxyUrl();
+  if (!base || aiDisabled) return null;
+  const s = Math.min(1, maxW / canvas.width);
+  const c = document.createElement("canvas"); c.width = Math.round(canvas.width * s); c.height = Math.round(canvas.height * s);
+  c.getContext("2d").drawImage(canvas, 0, 0, c.width, c.height);
+  const image = c.toDataURL("image/jpeg", 0.85).split(",")[1];
+  try {
+    const r = await fetch(`${base}/read`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image }) });
+    if (r.status === 501 || r.status === 404 || r.status === 405) { aiDisabled = true; return null; }
+    const j = await r.json();
+    return j && j.text && !/^none/i.test(j.text) ? j.text : null;
+  } catch { return null; }
+}
+// 相机：截取引导框里卡的下半部分（编号所在区域，留足余量）
+function liveAiCrop() {
+  const v = $("video"), vf = $("vf"), g = $("guide");
+  const vw = v.videoWidth, vh = v.videoHeight; if (!vw) return null;
+  const box = vf.getBoundingClientRect(), gb = g.getBoundingClientRect();
+  const s = Math.max(box.width / vw, box.height / vh), ox = (vw * s - box.width) / 2, oy = (vh * s - box.height) / 2;
+  const gx = (gb.left - box.left + ox) / s, gy = (gb.top - box.top + oy) / s, gw = gb.width / s, gh = gb.height / s;
+  const sx = Math.max(0, gx - gw * 0.08), sy = Math.max(0, gy + gh * 0.7), sw = Math.min(vw - sx, gw * 1.16), sh = Math.min(vh - sy, gh * 0.36);
+  const c = document.createElement("canvas"); c.width = Math.round(sw); c.height = Math.round(sh);
+  c.getContext("2d").drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+// AI 读到的文字 → 候选卡 → 用卡图核对；返回 { pick, list, parsed }
+async function resolveAiText(text, sigs) {
+  const parsed = parseText(text, true);
+  if (!parsed.nums.length) return null;
+  const cands = await identify(parsed);
+  if (!cands.length) return { parsed, list: [] };
+  if (cands.length === 1) {
+    const s = sigs.length ? await imageSim(cands[0], sigs) : null;
+    // AI 读到系列代码 + 编号，证据很强；卡图明显不像时才去试形近编号
+    if (s === null || s >= 0.4) return { parsed, pick: cands[0], sim: s };
+  }
+  const ir = await resolveByImage(cands, sigs);
+  if (ir && ir.pick) return { parsed, pick: ir.pick, sim: ir.sim };
+  return { parsed, list: ir && ir.scores.length ? ir.scores.map((x) => x.c) : cands };
+}
+
 // 只读到一个单独的编号：去美版特典系列找这个编号的卡（必须卡图对得上才采用）
 const PROMO_SETS = ["MEP", "SVP"];
 async function promoCandidates(n) {
@@ -1230,7 +1276,7 @@ function autoSave(c, el) {
 function addToLib(c, qty) {
   lib.push({ key: keyOf(c.lang, c.id), lang: c.lang, id: c.id, name: c.name, setName: c.setName, setId: c.abbr || c.setId, setRef: c.setId,
     localId: c.localId, official: c.official, image: c.image, tpId: c.tpId || null, tpOnly: !!c.tpOnly, abbr: c.abbr || null, rel: c.rel || null, qty,
-    price: c.price ? c.price.usd : null, src: c.price ? c.price.src : "", manual: false, at: Date.now() });
+    price: c.price ? c.price.usd : null, src: c.price ? c.price.src : "", manual: false, at: Date.now(), added: Date.now() });
   saveLib();
 }
 
@@ -1253,7 +1299,7 @@ function renderManualAdd(c) {
     const ex = lib.find((x) => x.key === keyOf("zh-cn", id));
     if (ex) ex.qty++;
     else lib.push({ key: keyOf("zh-cn", id), lang: "zh-cn", id, name, setName: c.setName || "简中", setId: code, setRef: code, localId: lid,
-      official: off ? parseInt(off, 10) : null, image: "", rel: c.rel || null, qty: 1, price: isNaN(price) ? null : toUsd(price), src: "", manual: true, at: Date.now() });
+      official: off ? parseInt(off, 10) : null, image: "", rel: c.rel || null, qty: 1, price: isNaN(price) ? null : toUsd(price), src: "", manual: true, at: Date.now(), added: Date.now() });
     saveLib(); toast(ex ? `已在收藏，数量 +1（×${ex.qty}）` : "已加入简中收藏");
     el.querySelector("button").disabled = true;
   };
@@ -1322,7 +1368,7 @@ async function startScan() {
   const recent = [];           // 最近几帧的读数
   let frame = -1, unsure = 0, unsureBest = null, votes = [], voteSig = "", stick = false;
   const startedAt = Date.now(); let lastHit = Date.now();
-  let framesDone = 0, noNumFrames = 0, deepTried = false; const hintTotals = new Map(), seenCands = [], searchedSets = new Set(), triedLone = new Set();
+  let framesDone = 0, noNumFrames = 0, deepTried = false, aiTries = 0; const hintTotals = new Map(), seenCands = [], searchedSets = new Set(), triedLone = new Set();
   while (scanning && my === loopId) {
     // 上一帧读到了编号，就继续用同一种处理方式，方便连续两次读到同样的结果
     if (!stick) frame++;
@@ -1450,8 +1496,30 @@ async function startScan() {
         }
       }
     }
-    // 连续很多帧都读不到编号：截下整个画面，用照片模式完整分析一次（只做一次）
+    // 连续几帧都读不出、或者一直拿不准：把卡底截图交给 AI 读（每次扫描最多两次）
     if (parsed.nums.length) noNumFrames = 0; else noNumFrames++;
+    if ((noNumFrames >= 5 || unsure >= 2) && aiTries < 2 && proxyUrl() && !aiDisabled) {
+      aiTries++; noNumFrames = 0;
+      const crop = liveAiCrop();
+      if (crop) {
+        setStatus("编号不好读，正在请 AI 帮忙读卡底…");
+        const text = await aiRead(crop);
+        if (my !== loopId) return;
+        if (text) {
+          $("ocrPeek").textContent = "AI 读到：" + text;
+          const res = await resolveAiText(text, liveCardSigs().concat(slideSigs($("video"), 0, true))).catch(() => null);
+          if (my !== loopId) return;
+          if (res && res.pick) {
+            await showResults(res.parsed, true, [res.pick]);
+            $("status").insertAdjacentHTML("beforeend", ` · AI 读卡底${res.sim != null ? `，卡图相似度 ${Math.round(res.sim * 100)}%` : ""}`);
+            finishScan(); return;
+          }
+          if (res && res.list.length > 1) { await showResults(res.parsed, true, res.list); finishScan(); return; }
+        }
+        setStatus("把卡放进框里，底部编号对准黄色虚线…");
+      }
+    }
+    // 连续很多帧都读不到编号：截下整个画面，用照片模式完整分析一次（只做一次）
     if (noNumFrames >= 12 && !deepTried) {
       deepTried = true;
       const v = $("video"), shot = document.createElement("canvas");
@@ -1522,12 +1590,34 @@ async function scanFromImage(img, quiet) {
   for (let y0 = 0.36; y0 <= 0.86; y0 += 0.07) bands.push(y0);
   bands.sort((a, b) => Math.abs(a + 0.09 - 0.8) - Math.abs(b + 0.09 - 0.8)); // 卡底编号通常在照片 70%~90% 高度
   // 先截左侧放大（编号都在卡的左下），再试整条；正色 / 反色（白字）/ 局部二值化，再试几个角度
-  const passes = [{ left: true }, { left: true, light: true }, {}, { light: true }, { left: true, adaptive: true }, { left: true, angle: -4 }, { left: true, angle: 4 },
+  let passes = [{ left: true }, { left: true, light: true }, {}, { light: true }, { left: true, adaptive: true }, { left: true, angle: -4 }, { left: true, angle: 4 },
     { angle: -4 }, { angle: 4 }, { adaptive: true }, { left: true, angle: -8 }, { left: true, angle: 8 }];
+  // 相机兜底时只做少量尝试，免得卡住几十秒
+  if (quiet) { passes = passes.slice(0, 4); bands.splice(5); }
   const total = passes.length * bands.length;
-  let k = 0, firstParsed = null, unsureBest = null;
+  let k = 0, firstParsed = null, unsureBest = null, aiTried = false;
   const votes = [], querySigs = [], slid = new Set(), photoHints = new Set();
   for (const pass of passes) {
+    // 第一轮读完还没结果：把照片下半部分交给 AI 读卡底
+    if (k === bands.length && !aiTried && !quiet && proxyUrl() && !aiDisabled) {
+      aiTried = true;
+      setStatus("编号不好读，正在请 AI 帮忙读卡底…");
+      // 照片左下这块（卡底编号一般在这里），保留够大的分辨率
+      const sw = w * 0.75, sh = h * 0.38, half = document.createElement("canvas");
+      half.width = Math.round(sw); half.height = Math.round(sh);
+      half.getContext("2d").drawImage(img, 0, h * 0.57, sw, sh, 0, 0, half.width, half.height);
+      const text = await aiRead(half, 1024);
+      if (text) {
+        if (!slid.size) { slid.add(1); querySigs.push(...slideSigs(img, 0)); }
+        const res = await resolveAiText(text, querySigs).catch(() => null);
+        if (res && res.pick) {
+          const r = await showResults(res.parsed, false, [res.pick]);
+          $("status").insertAdjacentHTML("beforeend", ` · AI 读卡底：${esc(text)}`);
+          return r;
+        }
+        if (res && res.list.length > 1) return showResults(res.parsed, false, res.list);
+      }
+    }
     for (const y0 of bands) {
       k++;
       setStatus(`识别中…（${k}/${total}）`);
@@ -1612,6 +1702,8 @@ $("pickIn").onchange = onPhoto;
 $("manualForm").onsubmit = async (e) => {
   e.preventDefault();
   const s = $("manualIn").value.trim(); if (!s) return;
+  // 查询后清空输入框，并收起键盘，方便输入下一张
+  $("manualIn").value = ""; $("manualIn").blur();
   if (scanning) { scanning = false; loopId++; setScanUI(stream ? "found" : "idle"); }
   setStatus("查找卡牌中…");
   await showResults(parseText(s, true), false);
@@ -1622,7 +1714,10 @@ const numOf = (it) => parseInt(it.localId, 10) || 0;
 function sortItems(items) {
   const byNum = (a, b) => numOf(a) - numOf(b);
   const relOf = (it) => it.rel || "";
+  const addedOf = (it) => it.added || it.at || 0;
   const cmp = {
+    "added-desc": (a, b) => addedOf(b) - addedOf(a),
+    "added-asc": (a, b) => addedOf(a) - addedOf(b),
     "price-desc": (a, b) => (b.price ?? -1) - (a.price ?? -1) || byNum(a, b),
     "price-asc": (a, b) => (a.price ?? Infinity) - (b.price ?? Infinity) || byNum(a, b),
     // 没有发售日期的排最后
@@ -1722,7 +1817,8 @@ async function refreshItem(it) {
   if (p && p.tpId) it.tpId = p.tpId;
   if (p && p.usd != null) { it.price = p.usd; it.src = p.src; }
   else if (/Cardmarket/.test(it.src || "")) { it.price = null; it.src = ""; } // 旧版存的欧元价不再使用
-  it.at = Date.now();
+  if (!it.added) it.added = it.at || Date.now(); // 旧收藏：用原来的时间当添加时间
+  it.priceAt = Date.now();
 }
 let refreshing = false;
 async function refreshAll(force, quiet) {
@@ -1793,7 +1889,8 @@ function go(page) {
   $("pageScan").hidden = !scan; $("pageLib").hidden = scan;
   if (scan) { $("navScan").setAttribute("aria-current", "page"); $("navLib").removeAttribute("aria-current"); }
   else { $("navLib").setAttribute("aria-current", "page"); $("navScan").removeAttribute("aria-current"); }
-  if (!scan) { stopScan(); renderLib(); refreshAll(false); }
+  // 每次进收藏页都默认按添加时间从新到旧
+  if (!scan) { stopScan(); libSort = "added-desc"; renderLib(); refreshAll(false); }
 }
 $("navScan").onclick = () => go("scan");
 $("navLib").onclick = () => go("lib");
