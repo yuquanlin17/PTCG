@@ -204,6 +204,7 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
 
     <div class="status" id="status"></div>
     <div class="peek" id="ocrPeek" hidden></div>
+    <div class="peek" id="visPeek" hidden></div>
     <div class="results" id="results"></div>
   </section>
 
@@ -398,7 +399,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.22b · 简中151 + 30C";
+const APP_VERSION = "10.22c · 整卡比对";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
@@ -1621,6 +1622,47 @@ async function startScan() {
     if (res && res.list.length > 1) { await showResults(res.parsed, true, await orderByImage(res.list, [], res.parsed.nums)); finishScan(); return true; }
     return false;
   }; const hintTotals = new Map(), seenCands = [], searchedSets = new Set(), triedLone = new Set();
+  // 整卡比对：和下面读字的循环同时跑，谁先认出来用谁。
+  // 连续两帧都是同一张（或者一帧就非常确定）才采用；卡底读到简中代码时交给读字的方法（简中卡和日版同图）
+  (async () => {
+    if (!(await loadVis()) || my !== loopId) return;
+    let last = null, k = 0, fam = null, famSince = 0;
+    const accept = async (r, pick) => {
+      loopId++; // 先停住读字的循环
+      await visShow(r, true, recent.slice(), pick);
+      finishScan();
+    };
+    while (scanning && my === loopId) {
+      // 已经认出卡图、在等卡底文字挑版本：每一轮都用新读到的文字再挑一次，最多等 2.5 秒，还挑不出来就列出来
+      if (fam) {
+        const pick = visPick(fam, recent);
+        if (pick.sure || Date.now() - famSince > 2500) return accept(fam, pick);
+      }
+      let r = null;
+      // 一帧试框本身和往里缩的几种大小（卡装在卡砖里、离得远一点，卡就比框小），取最像的
+      try {
+        for (const inset of k++ % 2 ? [0.06, 0.18] : [0, 0.12]) {
+          const c = liveCardCanvas(inset), x = c && (await visDecide(c));
+          if (x && (!r || x.best.sim > r.best.sim)) r = x;
+        }
+      } catch {}
+      if (!scanning || my !== loopId) return;
+      const zhcn = recent.some((p) => p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t)));
+      // 1.5 秒内两次认出同一张卡图才算（中间夹着没认出的帧也没关系），一次就非常确定的直接算
+      const again = r && r.ok && last && last.key === r.key && Date.now() - last.at < 1500;
+      if (r && r.ok) last = { key: r.key, at: Date.now() };
+      if (r && r.ok && !zhcn && (r.strong || again)) {
+        // 同一张卡图有几个版本时，等读字的循环读到编号 / 代码再挑
+        const pick = visPick(r, recent);
+        if (pick.sure) return accept(r, pick);
+        if (!fam || fam.key !== r.key) { fam = r; famSince = Date.now(); }
+        else if (r.best.sim > fam.best.sim) fam = r;
+        $("visPeek").hidden = false; $("visPeek").textContent = `卡图认出是「${r.best.p.name}」，有 ${r.family.length} 个版本，正在读卡底确认是哪个…`;
+      }
+      if (zhcn) fam = null;
+      await sleep(r && r.ok ? 30 : 200);
+    }
+  })();
   while (scanning && my === loopId) {
     // 上一帧读到了编号，就继续用同一种处理方式，方便连续两次读到同样的结果
     if (!stick) frame++;
@@ -1838,11 +1880,142 @@ async function startScan() {
 function finishScan() {
   scanning = false; loopId++;
   closeCam(); setScanUI("found");
-  $("ocrPeek").hidden = true;
+  $("ocrPeek").hidden = true; $("visPeek").hidden = true;
 }
-function stopScan() { scanning = false; loopId++; closeCam(); setScanUI("idle"); $("ocrPeek").hidden = true; }
+function stopScan() { scanning = false; loopId++; closeCam(); setScanUI("idle"); $("ocrPeek").hidden = true; $("visPeek").hidden = true; }
 
 $("scanBtn").onclick = () => { if (scanning) { stopScan(); setStatus(""); } else startScan(); };
+
+// ---------- 整卡比对（像淘宝拍照搜：整张卡图变成 384 个数字，和事先算好的卡图库比，最像的就是） ----------
+// 第一次用要下载识别模型（约 42MB）和卡图库，之后存在手机里；下载失败就只用读字的方法
+let vis = null, visIndex = null, visLoading = null;
+function loadVis() {
+  if (visIndex) return Promise.resolve(true);
+  if (!visLoading) {
+    const peek = $("visPeek"), prog = {};
+    const show = () => {
+      const files = Object.values(prog), got = files.reduce((a, f) => a + f[0], 0), all = files.reduce((a, f) => a + f[1], 0);
+      if (visIndex) return; // 加载完以后迟到的进度不显示
+      if (!all || got >= all) { peek.hidden = true; return; }
+      peek.hidden = false;
+      peek.textContent = `正在下载整卡识别模型（只有第一次）… ${(got / 1048576).toFixed(0)} / ${(all / 1048576).toFixed(0)} MB`;
+    };
+    visLoading = (async () => {
+      vis = await import("./vis.js");
+      const [, idx] = await Promise.all([
+        vis.loadModel((p) => { if (p.status === "progress" && p.total > 1e6) { prog[p.file] = [p.loaded, p.total]; show(); } }),
+        vis.loadIndex("./vis/", (got, total) => { prog.index = [got, total || got]; show(); }),
+      ]);
+      visIndex = idx; peek.hidden = true;
+      return true;
+    })().catch((e) => { console.warn("整卡识别不可用：", e); visLoading = null; peek.hidden = true; return false; });
+  }
+  return visLoading;
+}
+const visItem = (i) => { const it = visIndex.meta.items[i], s = visIndex.meta.sets[it[1]]; return { id: it[0], set: s[0], line: s[1] === "en" ? "pokemon" : "pokemon-japan", number: it[2], name: it[3], rarity: it[4], rel: it[5] }; };
+const baseName = (s) => String(s || "").replace(/\s*\(.*?\)\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+// 比对一张标准卡片图，判断认没认出来：最像的够像、而且比「别的卡」明显更像才算。
+// 同一张卡图常有好几个版本（日版 / 美版 / 复刻 / Prize Pack），卡图几乎一样，算作一家（family），后面再用卡底文字挑
+async function visDecide(canvas) {
+  const q = await vis.embed(canvas);
+  const top = vis.search(visIndex, q, 16).map((t) => ({ ...t, p: visItem(t.i) }));
+  const best = top[0];
+  const sameName = (t) => baseName(t.p.name) === baseName(best.p.name);
+  const rival = top.find((t) => !sameName(t));
+  const margin = best.sim - (rival ? rival.sim : 0);
+  const ok = (best.sim >= 0.7 && margin >= 0.06) || (best.sim >= 0.8 && margin >= 0.04);
+  // （各版本在 TCGplayer 上的图片质量不一，同一张图也可能差到 0.09）
+  const family = top.filter((t) => sameName(t) && best.sim - t.sim < 0.1);
+  // key：连续两帧是不是同一张卡图（同一家的几个版本谁排第一会来回跳，按卡名算）
+  return { ok, strong: ok && best.sim >= 0.78 && margin >= 0.08, best, family, margin, key: baseName(best.p.name), top };
+}
+// 在同一张卡图的几个版本里，用读到的卡底文字挑：编号、总数、EN、日版系列代码
+// 挑得出来返回 [那一张]；挑不出来，最像的又领先不多，就按相似度全列出来
+function visPick(r, hints = []) {
+  const fam = r.family;
+  if (fam.length === 1) return { list: fam, sure: true };
+  const nums = hints.flatMap((p) => p.nums || []), en = hints.some((p) => p.en);
+  const tokens = new Set(hints.flatMap((p) => p.tokens || []));
+  const totals = new Set(hints.flatMap((p) => p.totalHints || []));
+  const score = (t) => {
+    const [a, b] = String(t.p.number).split("/").map((x) => parseInt(x, 10));
+    let s = 0;
+    if (nums.some((x) => x.n === a)) s += 2;
+    if (b && (nums.some((x) => x.total === b) || totals.has(b))) s += 1;
+    if (en && t.p.line === "pokemon") s += 1.5;
+    const code = String(t.p.set).split(":")[0].toUpperCase();
+    if (t.p.line === "pokemon-japan" && tokens.has(code)) s += 1.5;
+    return s;
+  };
+  const sc = fam.map((t) => ({ t, s: score(t) })).sort((x, y) => y.s - x.s || y.t.sim - x.t.sim);
+  if (sc[0].s >= 1 && (sc.length < 2 || sc[0].s > sc[1].s)) return { list: [sc[0].t], sure: true, byText: true };
+  if (fam[0].sim - fam[1].sim >= 0.04) return { list: [fam[0]], sure: true };
+  return { list: fam.slice(0, 4), sure: false };
+}
+// 认出来了：显示结果（hints = 同时读到的卡底文字，用来挑版本、分辨繁中）
+async function visShow(r, auto, hints = [], pick = visPick(r, hints)) {
+  const hit = (t) => candFromProduct({ p: t.p, s: { line: t.p.line } });
+  let list = [];
+  for (const t of pick.list) { const c = await hit(t); if (!list.some((x) => x.id === c.id)) list.push(c); }
+  hints = { tw: hints.some((p) => p.twPrev && p.twPrev.length) };
+  // 繁中卡和日版同图：卡底读到了繁中标记就换成繁中
+  if (hints.tw) list = await Promise.all(list.map(async (c) => (c.lang === "ja" ? (await counterpart(c).catch(() => null)) || c : c)));
+  const c = list[0];
+  if (list.length > 1) list.forEach((x, i) => { x._first = list[0]; if (i === 0) x._sim = pick.list[0].sim; });
+  const res = await showResults({ nums: [{ n: parseInt(c.localId, 10), total: c.official }], tokens: [], twPrev: [], raw: "" }, auto, list);
+  $("status").insertAdjacentHTML("beforeend", list.length > 1 ? " · 同一张卡图有几个版本（日版 / 美版 / 复刻…），请点你手上那张"
+    : ` · 整卡比对（相似度 ${Math.round(r.best.sim * 100)}%${pick.byText ? "，卡底文字确认版本" : ""}）`);
+  // 简中 151 和日版 151 同图：日版 151 的结果旁边放一个改成简中的按钮
+  if (list.length === 1 && c.lang === "ja" && /^SV2a$/i.test(c.setId)) {
+    const el = $("results").querySelector(".card [data-act]");
+    if (el) {
+      const b = document.createElement("button"); b.className = "btn small"; b.textContent = "其实是简中卡（151C）";
+      b.onclick = () => { if (c._autoKey) { lib = lib.filter((x) => x.key !== c._autoKey); saveLib(); } showResults(parseText(`151C ${parseInt(c.localId, 10)}`, true), false); };
+      el.appendChild(b);
+    }
+  }
+  return res;
+}
+// 相机：取引导框里的卡片（交替用框本身和稍微往里缩一点，卡比框小一点也对得上）
+function liveCardCanvas(inset) {
+  const v = $("video"), vf = $("vf"), g = $("guide");
+  const vw = v.videoWidth, vh = v.videoHeight; if (!vw) return null;
+  const box = vf.getBoundingClientRect(), gb = g.getBoundingClientRect();
+  const s = Math.max(box.width / vw, box.height / vh), ox = (vw * s - box.width) / 2, oy = (vh * s - box.height) / 2;
+  const gx = (gb.left - box.left + ox) / s, gy = (gb.top - box.top + oy) / s, gw = gb.width / s, gh = gb.height / s;
+  return vis.cardCanvas(v, gx + gw * inset, gy + gh * inset, gw * (1 - 2 * inset), gh * (1 - 2 * inset));
+}
+// 照片：卡可能在任何位置，先粗找（几种大小 × 几个位置），再在最像的位置附近细调
+async function visPhoto(img) {
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  const R = vis.CARD_RATIO, maxH = Math.min(h, w / R), fast = vis.modelReady() && (await vis.loadModel()).device === "webgpu";
+  const tries = [];
+  for (const sc of fast ? [0.5, 0.62, 0.75, 0.9] : [0.55, 0.7, 0.88])
+    for (const [dx, dy] of fast ? [[0, 0], [0, -0.07], [0, 0.07], [-0.07, 0], [0.07, 0]] : [[0, 0], [0, -0.06], [0, 0.06]])
+      tries.push({ cx: w * (0.5 + dx), cy: h * (0.5 + dy), ch: maxH * sc });
+  let best = null;
+  const run = async (t) => {
+    const cw = t.ch * R, r = await visDecide(vis.cardCanvas(img, t.cx - cw / 2, t.cy - t.ch / 2, cw, t.ch));
+    if (!best || r.best.sim > best.r.best.sim) best = { t, r };
+  };
+  for (const t of tries) await run(t);
+  // 细调：大小 ±7%、位置 ±4%
+  const b = best.t, step = b.ch * 0.06;
+  for (const [ds, dx, dy] of [[0.93, 0, 0], [1.07, 0, 0], [1, -1, 0], [1, 1, 0], [1, 0, -1], [1, 0, 1]])
+    await run({ cx: b.cx + dx * step, cy: b.cy + dy * step, ch: b.ch * ds });
+  // 顺便读一下这张卡的卡底：繁中（代码后面有 F）、简中（C…C / 151C）和日版同图，只能靠字分
+  // （找到的位置不一定和卡边完全对齐，上下各多读一条，合在一起）
+  const t = best.t, cw = t.ch * R;
+  let parsed = null;
+  for (const dy of [0.36, 0.3, 0.42]) {
+    let p = null;
+    try { p = parseText((await ocrWords(prep(img, t.cx - cw * 0.56, t.cy + t.ch * dy, cw * 0.78, t.ch * 0.17, { target: 1600 }))).text); } catch { continue; }
+    if (!parsed) parsed = p;
+    else { parsed.nums.push(...p.nums); parsed.tokens.push(...p.tokens); parsed.twPrev.push(...p.twPrev); parsed.totalHints.push(...p.totalHints); parsed.en = parsed.en || p.en; parsed.raw += " | " + p.raw; }
+    if (p.nums.length) break;
+  }
+  return { ...best.r, parsed };
+}
 
 // 整个系列比对找到的卡：显示结果并注明。
 // 如果别的系列里有同名同编号的卡（原版 / 复刻，卡图几乎一样），不自动确认，一起列出来让你选
@@ -1875,6 +2048,13 @@ async function showPicked(parsed, ir) {
 async function scanFromImage(img, quiet) {
   const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
   await getWorker();
+  // 先整卡比对（相机兜底调用时，整卡比对已经在相机那边跑过了）
+  if (!quiet && (await loadVis())) {
+    setStatus("整卡比对中…");
+    const r = await visPhoto(img).catch(() => null);
+    const p = r && r.parsed, zhcn = p && p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t));
+    if (r && r.ok && !zhcn) return visShow(r, false, p ? [p] : []);
+  }
   const bands = [];
   for (let y0 = 0.36; y0 <= 0.86; y0 += 0.07) bands.push(y0);
   bands.sort((a, b) => Math.abs(a + 0.09 - 0.8) - Math.abs(b + 0.09 - 0.8)); // 卡底编号通常在照片 70%~90% 高度
@@ -2394,7 +2574,7 @@ renderFx();
 loadFx();
 getIndex();          // 预先加载四种语言的系列列表
 refreshAll(false);
-window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank, slideSigs, setImageSearch, setsFor, productSig, tcgSetList, resolveByImage, withLookalikes, resolveByName, namesFor, ocrName, nameScore };
+window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank, slideSigs, setImageSearch, setsFor, productSig, tcgSetList, resolveByImage, withLookalikes, resolveByName, namesFor, ocrName, nameScore, loadVis, visDecide, visPhoto, visShow, visPick, liveCardCanvas, get vis() { return vis; }, get visIndex() { return visIndex; } };
 </script>
 </body>
 </html>
