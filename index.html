@@ -54,6 +54,7 @@ button { cursor: pointer; }
   padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 header.top { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-block: 12px 10px; }
 header.top h1 { font-size: 19px; margin: 0; letter-spacing: .02em; white-space: nowrap; }
+header.top h1 .ver { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; margin-top: 1px; }
 
 /* 货币切换 */
 .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 2px; }
@@ -170,7 +171,7 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
 <body>
 <div class="app">
   <header class="top">
-    <h1>PTCG 卡价扫描</h1>
+    <h1>PTCG 卡价扫描<span class="ver" id="appVer"></span></h1>
     <div class="seg" role="group" aria-label="显示货币" id="curSeg">
       <button data-cur="USD">USD $</button>
       <button data-cur="JPY">JPY ¥</button>
@@ -396,6 +397,9 @@ async function getIndex() {
 // ---------- 价格：TCGplayer 市价（美元） ----------
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
+// 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
+const APP_VERSION = "10.22 · 简中151";
+$("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
   const s = store.get("ptcg.proxy", "");
@@ -697,10 +701,22 @@ async function candFromProduct(hit) {
     setName: p.set, setId: code, localId: a, official: total, rel: p.rel || null, tpPrice: p.price, score: 3 };
 }
 
-// 根据语言取价格：繁中用同编号的日版卡价格作参考，简中暂无数据源
+// 简中卡在 TCGdex 里没有的系列，PriceCharting 有卡表、卡图和裸卡价（目前只有 151C）
+const ZH_CN_PC = { "151C": { id: "151C", name: "宝可梦卡牌151", pc: "pokemon chinese 151 collect" } };
+function pcLookup(q, n) {
+  const base = proxyUrl();
+  if (!base) return null;
+  return getJSON(`${base}?pc=${encodeURIComponent(q)}&n=${n}`, `pc.${q.toLowerCase()}`, 6 * 3600e3);
+}
+
+// 根据语言取价格：繁中用同编号的日版卡价格作参考，简中只有 PriceCharting 收录的系列有价格
 // 没有价格中转时，美版退回 TCGdex 里附带的 TCGplayer 价格
 async function priceFor(x) {
-  if (x.lang === "zh-cn") return null;
+  if (x.lang === "zh-cn") {
+    if (!x.pcq) return null;
+    try { const j = await pcLookup(x.pcq, parseInt(x.localId, 10)); if (j && j.price != null) return { usd: j.price, src: "PriceCharting", detail: "裸卡价 · 简中" }; } catch {}
+    return null;
+  }
   try {
     const p = await tcgPrice(x.lang === "zh-tw" ? { ...x, lang: "ja" } : x);
     if (p && (p.usd != null || p.tpId)) {
@@ -724,6 +740,7 @@ async function priceFor(x) {
 const LIMITLESS = "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com";
 function imgSources(x) {
   const out = [];
+  if (x.pcImg) out.push(x.pcImg);
   if (x.tpId) out.push(`https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_200w.jpg`);
   if (x.image) out.push(x.image + "/low.webp");
   const n = parseInt(x.localId, 10);
@@ -860,6 +877,7 @@ function refSig(c) {
     const urls = [];
     if (c.tpId) urls.push(`https://tcgplayer-cdn.tcgplayer.com/product/${c.tpId}_200w.jpg`);
     if (c.image) urls.push(c.image + "/low.webp");
+    if (c.pcImg) urls.push(c.pcImg);
     for (const u of urls) {
       try { const im = await loadImg(u); return sigFrom(im, im.naturalWidth / 2, im.naturalHeight / 2, im.naturalWidth * 0.98, im.naturalHeight * 0.98); } catch {}
     }
@@ -1103,7 +1121,8 @@ async function refineWithCode(canvas, words, parsed, votes = []) {
 // 卡底例子：日版「H SV8a 236/187 SAR」 繁中「H SV8a F 236/187」 美版「H PAF EN 232/091」 简中「CSV8C 100/207」
 function parseText(text, manual) {
   // 代码外框、竖线之类当作空格
-  const t = text.replace(/[|\\[\](){}<>]/g, " ").replace(/\s+/g, " ").trim();
+  // 简中 151 的代码是「151C」，读成 / 写成「151 C」也算
+  const t = text.replace(/[|\\[\](){}<>]/g, " ").replace(/\s+/g, " ").trim().replace(/(^|\s)151 C(?=\s|$)/gi, "$1151C");
   const fix = (s) => s.replace(/[Oo]/g, "0").replace(/[lI]/g, "1");
   const nums = [];
   let m;
@@ -1177,6 +1196,8 @@ async function identify(parsed) {
     if (enKey && (parsed.en || enKey !== U || (parsed.manual && !inJaTw(U)))) addHit("en", idx.en.map.get(EN_ABBR[enKey].toUpperCase()), 3);
     // 简中：C 开头 C 结尾的商品编号
     if (/^C[A-Z0-9.]{2,}C$/.test(U)) addHit("zh-cn", idx["zh-cn"].map.get(U) || nearestSet(idx["zh-cn"].list, U, parsed) || { id: U, name: "" }, 3);
+    // 简中 151：代码不是 C…C 格式，TCGdex 里也没有，卡表和价格用 PriceCharting 的
+    if (/^151C\d?$/.test(U)) addHit("zh-cn", ZH_CN_PC["151C"], 3.5);
     // 日版 / 繁中：代码相同，繁中多一个 F
     let base = U, glued = false;
     if (!inJaTw(U) && U.endsWith("F") && inJaTw(U.slice(0, -1))) { base = U.slice(0, -1); glued = true; }
@@ -1304,6 +1325,16 @@ async function tcgNumberCandidates(parsed) {
 // 在某个系列里找第 n 张卡
 async function candidate(lang, set, num) {
   const n = num.n;
+  if (lang === "zh-cn" && set.pc) {
+    const q = `${set.pc} #${n}`;
+    let j = null;
+    try { j = await pcLookup(q, n); } catch {}
+    if (j && j.title) {
+      const lid = String(n).padStart(3, "0");
+      return { lang, id: `${set.id}-${lid}`, localId: lid, name: j.title.replace(/\s*#\d+.*$/, ""), pcq: q, pcImg: j.img || "",
+        setId: set.id, setName: set.name, official: num.total || null, rel: null };
+    }
+  }
   if (lang === "zh-cn") {
     let det = null;
     try { det = await getSetCached("zh-cn", set.id); } catch {}
@@ -1463,7 +1494,7 @@ function autoSave(c, el) {
 
 function addToLib(c, qty) {
   lib.push({ key: keyOf(c.lang, c.id), lang: c.lang, id: c.id, name: c.name, setName: c.setName, setId: c.abbr || c.setId, setRef: c.setId,
-    localId: c.localId, official: c.official, image: c.image, tpId: c.tpId || null, tpOnly: !!c.tpOnly, abbr: c.abbr || null, rel: c.rel || null, qty,
+    localId: c.localId, official: c.official, image: c.image, tpId: c.tpId || null, tpOnly: !!c.tpOnly, abbr: c.abbr || null, rel: c.rel || null, pcq: c.pcq || null, pcImg: c.pcImg || "", qty,
     price: c.price ? c.price.usd : null, src: c.price ? c.price.src : "", manual: false, at: Date.now(), added: Date.now() });
   recordPrice(lib[lib.length - 1]);
   saveLib(); sortByAddedAfterAdd();
@@ -2236,16 +2267,18 @@ async function loadHistory() {
   }
   if (my !== shReq) return;
   const base = proxyUrl();
-  if (!tp || !base) { chart.innerHTML = `<div class="msg">${x.lang === "zh-cn" ? "简中卡暂无价格数据" : "这张卡在 TCGplayer 上没有找到，暂无历史价格"}</div>`; return; }
+  // 简中 151 这类只有 PriceCharting 收录的卡：所有区间都用 PriceCharting
+  const pcOnly = !!x.pcq;
+  if ((!tp && !pcOnly) || !base) { chart.innerHTML = `<div class="msg">${x.lang === "zh-cn" ? "简中卡暂无价格数据" : "这张卡在 TCGplayer 上没有找到，暂无历史价格"}</div>`; return; }
   const from = new Date(Date.now() - RANGE_DAYS[shRange] * DAY).toISOString().slice(0, 10);
   const inRange = (arr) => (arr || []).filter((p) => p.p > 0 && p.d >= from);
   let pts = [], source = "", variant = "";
-  if (LONG_RANGE.has(shRange)) {
+  if (pcOnly || LONG_RANGE.has(shRange)) {
     // 长期：PriceCharting 月度裸卡价（最早到 2020 年底）
     const name = String(x.tpName || x.name).replace(/\s*-\s*\d+\/\d+.*$/, "").replace(/\s*\(.*?\)\s*/g, " ").trim();
     const setEn = String(x.tpSet || x.setName || "").replace(/^[^:]*:\s*/, "");
     const n = parseInt(x.localId, 10) || "";
-    const q = `${name} ${n} ${setEn}${x.lang === "ja" || x.lang === "zh-tw" ? " japanese" : ""}`.replace(/\s+/g, " ").trim();
+    const q = pcOnly ? x.pcq : `${name} ${n} ${setEn}${x.lang === "ja" || x.lang === "zh-tw" ? " japanese" : ""}`.replace(/\s+/g, " ").trim();
     try {
       const j = await getJSON(`${base}?pc=${encodeURIComponent(q)}&n=${n}`, `pc.${q.toLowerCase()}`, 24 * 3600e3);
       pts = inRange(j.points); if (pts.length >= 2) source = `PriceCharting 裸卡价${j.title ? "（" + j.title + "）" : ""}`;
@@ -2258,7 +2291,7 @@ async function loadHistory() {
   }
   if (my !== shReq) return;
   // 退一步：价格服务器每天记下的价格（KV）
-  if (pts.length < 2) {
+  if (pts.length < 2 && tp) {
     try { const j = await getJSON(`${base}?kv=${tp}`, `kv.${tp}`, 3600e3); const k = inRange(j.points); if (k.length >= 2) { pts = k; source = "价格服务器每天记录的 TCGplayer 市价"; } } catch {}
     if (my !== shReq) return;
   }
@@ -2282,7 +2315,7 @@ async function loadHistory() {
   const d = pts[pts.length - 1].p - pts[0].p, flat = Math.abs(d) < 0.005;
   $("shChg").textContent = flat ? `— ${fmt(0)}` : `${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))}`;
   $("shChg").className = "chg " + (flat ? "flat" : d > 0 ? "up" : "down");
-  $("shNote").textContent = `${source} · ${RANGE_NOTE[shRange]}${shRange !== "all" && new Date(pts[0].d) - new Date(from) > 45 * DAY ? `（只查到 ${pts[0].d.slice(0, 7)} 以后的）` : ""}。手指在图上滑动可以看每个点。`;
+  $("shNote").textContent = `${source} · ${pcOnly ? RANGE_NOTE[shRange].replace(/（.*）/, "（每月一个点）") : RANGE_NOTE[shRange]}${shRange !== "all" && new Date(pts[0].d) - new Date(from) > 45 * DAY ? `（只查到 ${pts[0].d.slice(0, 7)} 以后的）` : ""}。手指在图上滑动可以看每个点。`;
   $("shVol").parentElement.hidden = !pts.some((p) => p.q); // 长期数据没有成交量
 }
 // 单条曲线：2px 线 + 淡面积，弱化网格，标出最新一点；手指 / 鼠标滑动显示十字线和数值
