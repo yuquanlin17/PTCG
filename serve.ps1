@@ -79,7 +79,13 @@ while ($listener.IsListening) {
       $set = $ctx.Request.QueryString["set"]
       $hist = $ctx.Request.QueryString["history"]
       $pc = $ctx.Request.QueryString["pc"]
-      if ($pc) {
+      $pcs = $ctx.Request.QueryString["pcs"]
+      if ($pcs) {
+        $h = @{ "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36"; "Accept" = "application/json" }
+        $j = Invoke-RestMethod -Headers $h ("https://www.pricecharting.com/search-products?type=prices&q=" + [uri]::EscapeDataString($pcs))
+        $items = @($j.products | Select-Object -First 30 | ForEach-Object { $pr = "$($_.price1)" -replace '[$,]', ''; [ordered]@{ id = $_.id; name = $_.productName; set = $_.consoleName; img = $_.imageUri; price = $(if ($pr) { [double]$pr } else { $null }) } })
+        $json = (@{ at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); items = $items } | ConvertTo-Json -Depth 4 -Compress)
+      } elseif ($pc) {
         $json = Pc-Card $pc (($ctx.Request.QueryString["n"]) -replace '\D', '')
       } elseif ($hist) {
         $range = $ctx.Request.QueryString["range"]; if (@("month", "quarter", "annual") -notcontains $range) { $range = "quarter" }
