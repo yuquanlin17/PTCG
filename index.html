@@ -138,6 +138,32 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
 .settings { margin-top: 14px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .settings input { width: 70px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 5px 8px; font-family: var(--mono); }
 .field { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: var(--bg); width: 100%; min-width: 0; }
+/* 价格曲线面板（点卡片打开） */
+.card[data-clickable] { cursor: pointer; }
+.card[data-clickable]:active { background: var(--bg); }
+.sheet-bg { position: fixed; inset: 0; background: var(--shade); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+.sheet { background: var(--surface); width: 100%; max-width: 560px; border-radius: 18px 18px 0 0; max-height: 92%; overflow-y: auto;
+  padding: 16px max(16px, env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.sheet-head { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: start; }
+.sheet-head img, .sheet-head .ph { width: 64px; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 6px; background: var(--line); }
+.sheet-head .ph { display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.sheet-close { border: 0; background: var(--bg); width: 32px; height: 32px; border-radius: 50%; font-size: 18px; color: var(--muted); }
+.sheet .big { font-family: var(--mono); font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chg { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.chg.up { color: var(--good); } .chg.down { color: var(--bad); } .chg.flat { color: var(--muted); }
+.ranges { display: inline-flex; background: var(--bg); border-radius: 10px; padding: 3px; gap: 2px; margin: 14px 0 8px; }
+.ranges button { border: 0; background: transparent; border-radius: 8px; padding: 5px 12px; font-size: 13px; color: var(--muted); }
+.ranges button[aria-pressed="true"] { background: var(--surface); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.chart { position: relative; width: 100%; height: 200px; touch-action: none; }
+.chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.chart .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; text-align: center; padding: 0 12px; }
+.tip { position: absolute; top: 0; pointer-events: none; background: var(--fg); color: var(--bg); border-radius: 8px; padding: 5px 8px; font-size: 12px; line-height: 1.35; white-space: nowrap; transform: translateX(-50%); }
+.tip b { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.stats div { background: var(--bg); border-radius: 10px; padding: 8px 10px; }
+.stats small { display: block; color: var(--muted); font-size: 11.5px; }
+.stats b { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 14px; }
+.sheet .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
@@ -183,7 +209,7 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
   <!-- 收藏页 -->
   <section id="pageLib" hidden>
     <div class="summary">
-      <div><div class="total" id="libTotal">$0.00</div><small id="libCount">0 张</small></div>
+      <div><div class="total" id="libTotal">$0.00</div><div id="libChg"></div><small id="libCount">0 张</small></div>
       <button class="btn small" id="refreshBtn">刷新价格</button>
     </div>
     <div class="filters" role="tablist" aria-label="按版本筛选" id="libFilters"></div>
@@ -226,6 +252,32 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
 </nav>
 <div class="toast" id="toast" hidden></div>
 
+<div class="sheet-bg" id="sheetBg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shName">
+    <div class="sheet-head">
+      <i id="shImg"></i>
+      <div style="min-width:0">
+        <div class="name" id="shName" style="font-weight:700;font-size:16px;overflow-wrap:anywhere"></div>
+        <div class="sub" id="shSub" style="color:var(--muted);font-size:12.5px;overflow-wrap:anywhere"></div>
+        <div><span class="big" id="shPrice"></span> <span class="chg" id="shChg"></span></div>
+      </div>
+      <button class="sheet-close" id="shClose" aria-label="关闭">×</button>
+    </div>
+    <div class="ranges" role="group" aria-label="时间范围">
+      <button data-range="month">1 个月</button>
+      <button data-range="quarter">3 个月</button>
+      <button data-range="annual">1 年</button>
+    </div>
+    <div class="chart" id="shChart"></div>
+    <div class="stats">
+      <div><small>最高</small><b id="shHi">—</b></div>
+      <div><small>最低</small><b id="shLo">—</b></div>
+      <div><small>成交量</small><b id="shVol">—</b></div>
+    </div>
+    <div class="note" id="shNote"></div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
 "use strict";
@@ -249,7 +301,7 @@ const store = {
 let lib = store.get("ptcg.lib", []);          // 收藏（价格统一按美元存）
 let threshold = store.get("ptcg.threshold", 5);
 let libFilter = store.get("ptcg.filter", "all");
-let libSort = store.get("ptcg.sort", "price-desc");
+let libSort = store.get("ptcg.sort", "added-desc");
 const saveLib = () => store.set("ptcg.lib", lib);
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
 
@@ -281,6 +333,7 @@ function renderFx() {
     (fx.at ? `（${new Date(fx.at).toLocaleDateString()} 更新）` : "（离线默认值）");
   document.querySelectorAll("[data-usd]").forEach((e) => (e.textContent = fmt(+e.dataset.usd)));
   if (!$("pageLib").hidden) renderLib();
+  refreshSheet(); // 曲线面板开着时按新货币重画
 }
 document.querySelectorAll("#curSeg button").forEach((b) => {
   b.onclick = () => { cur = b.dataset.cur; store.set("ptcg.cur", cur); renderFx(); };
@@ -1222,6 +1275,7 @@ function renderCard(c, choosable) {
       <div class="row-actions" data-act></div>
     </div>`;
   el.querySelector("[data-img]").replaceWith(cardImg(c));
+  makeClickable(el, c);
   if (choosable) {
     const b = document.createElement("button"); b.className = "btn small"; b.textContent = "就是这张";
     b.onclick = () => {
@@ -1277,8 +1331,11 @@ function addToLib(c, qty) {
   lib.push({ key: keyOf(c.lang, c.id), lang: c.lang, id: c.id, name: c.name, setName: c.setName, setId: c.abbr || c.setId, setRef: c.setId,
     localId: c.localId, official: c.official, image: c.image, tpId: c.tpId || null, tpOnly: !!c.tpOnly, abbr: c.abbr || null, rel: c.rel || null, qty,
     price: c.price ? c.price.usd : null, src: c.price ? c.price.src : "", manual: false, at: Date.now(), added: Date.now() });
-  saveLib();
+  recordPrice(lib[lib.length - 1]);
+  saveLib(); sortByAddedAfterAdd();
 }
+// 平时记住上次选的排序；新加了卡之后切回「添加时间 新→旧」，刚加的卡排在最上面
+function sortByAddedAfterAdd() { libSort = "added-desc"; store.set("ptcg.sort", libSort); }
 
 // 简中：手动登记（编号来自识别结果）
 function renderManualAdd(c) {
@@ -1300,7 +1357,7 @@ function renderManualAdd(c) {
     if (ex) ex.qty++;
     else lib.push({ key: keyOf("zh-cn", id), lang: "zh-cn", id, name, setName: c.setName || "简中", setId: code, setRef: code, localId: lid,
       official: off ? parseInt(off, 10) : null, image: "", rel: c.rel || null, qty: 1, price: isNaN(price) ? null : toUsd(price), src: "", manual: true, at: Date.now(), added: Date.now() });
-    saveLib(); toast(ex ? `已在收藏，数量 +1（×${ex.qty}）` : "已加入简中收藏");
+    saveLib(); if (!ex) sortByAddedAfterAdd(); toast(ex ? `已在收藏，数量 +1（×${ex.qty}）` : "已加入简中收藏");
     el.querySelector("button").disabled = true;
   };
   return el;
@@ -1755,7 +1812,7 @@ function renderLibItem(it) {
     <div class="meta">
       <div class="name"><span class="lang-pill">${LANGS[it.lang]}</span>${esc(it.name)}</div>
       <div class="sub">${esc(it.setName)} · ${esc(it.setId)} ${esc(it.localId)}${numTail(it)}${it.rel ? " · " + esc(it.rel.slice(0, 7)) : ""}</div>
-      <div>${it.price != null ? `<span class="price" data-usd="${it.price}">${fmt(it.price)}</span>` : '<span class="price na">暂无价格</span>'}<span class="price-src">${esc(it.manual ? "手动" : it.src)}</span></div>
+      <div>${it.price != null ? `<span class="price" data-usd="${it.price}">${fmt(it.price)}</span>` : '<span class="price na">暂无价格</span>'} ${(() => { const b = baselineOf(it); return b ? chgHtml(b.p, it.price) + (b.young ? '<small style="color:var(--muted);margin-left:4px">比加入时</small>' : "") : ""; })()}<span class="price-src">${esc(it.manual ? "手动" : it.src)}</span></div>
       <div class="row-actions">
         <span class="qty"><button aria-label="减一" data-d="-1">−</button><input aria-label="数量" inputmode="numeric" value="${it.qty}"><button aria-label="加一" data-d="1">+</button></span>
         <button class="btn small" data-edit>改价格</button>
@@ -1763,6 +1820,7 @@ function renderLibItem(it) {
       </div>
     </div>`;
   el.querySelector("[data-img]").replaceWith(cardImg(it));
+  makeClickable(el, it);
   const qi = el.querySelector(".qty input");
   el.querySelectorAll(".qty button").forEach((b) => b.onclick = () => { it.qty = Math.max(1, it.qty + +b.dataset.d); qi.value = it.qty; saveLib(); renderLibHeader(); });
   qi.onchange = () => { const v = parseInt(qi.value, 10); it.qty = v > 0 ? v : 1; qi.value = it.qty; saveLib(); renderLibHeader(); };
@@ -1782,9 +1840,38 @@ function renderLibItem(it) {
   };
   return el;
 }
+// ---------- 24 小时涨跌（像股票）----------
+// 每张卡在本机记一段价格记录 ph = [[时间, 美元], …]：价格变了才记，最多留 30 天。
+// 自动刷新很频繁（每小时），市价大约一天才变一次，所以不跟「上次刷新」比，而是跟 24 小时前比，数字才稳定
+const DAY = 24 * 3600e3;
+function recordPrice(it) {
+  if (it.manual || it.price == null) return;
+  const ph = it.ph || (it.ph = []), now = Date.now(), last = ph[ph.length - 1];
+  if (!last || Math.abs(last[1] - it.price) > 1e-9) ph.push([now, it.price]);
+  while (ph.length > 2 && ph[1][0] < now - 30 * DAY) ph.shift(); // 第一条保留作 30 天前的基准
+}
+// 涨跌的基准价：24 小时前那一刻的价格；加入不到 24 小时就用加入时的价格
+function baselineOf(it) {
+  if (it.manual || it.price == null || !it.ph || !it.ph.length) return null;
+  const cut = Date.now() - DAY;
+  let base = null;
+  for (const [t, p] of it.ph) { if (t <= cut) base = { p, young: false }; else break; }
+  return base || { p: it.ph[0][1], young: true };
+}
+// 涨跌标签：只写金额，▲ $0.20 / ▼ $0.20，涨绿跌红
+function chgHtml(prev, now) {
+  if (prev == null || now == null) return "";
+  const d = now - prev;
+  if (Math.abs(d) < 0.005) return `<span class="chg flat">— ${fmt(0)}</span>`;
+  return `<span class="chg ${d > 0 ? "up" : "down"}">${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))}</span>`;
+}
 function renderLibHeader() {
   const items = libFilter === "all" ? lib : lib.filter((x) => x.lang === libFilter);
-  $("libTotal").textContent = fmt(items.reduce((a, x) => a + (x.price || 0) * x.qty, 0));
+  const now = items.reduce((a, x) => a + (x.price || 0) * x.qty, 0);
+  const bases = items.map((x) => baselineOf(x));
+  const prev = items.reduce((a, x, i) => a + (bases[i] ? bases[i].p : x.price || 0) * x.qty, 0);
+  $("libTotal").textContent = fmt(now);
+  $("libChg").innerHTML = bases.some(Boolean) ? chgHtml(prev, now) + ' <small style="color:var(--muted)">24 小时</small>' : "";
   $("libCount").textContent = `${items.reduce((a, x) => a + x.qty, 0)} 张 · ${items.length} 种`;
   document.querySelectorAll("#libFilters .fchip").forEach((t, i) => {
     const key = ["all", ...LANG_KEYS][i];
@@ -1815,7 +1902,7 @@ async function refreshItem(it) {
   if (it.manual) return;
   const p = await priceFor(it);
   if (p && p.tpId) it.tpId = p.tpId;
-  if (p && p.usd != null) { it.price = p.usd; it.src = p.src; }
+  if (p && p.usd != null) { it.price = p.usd; it.src = p.src; recordPrice(it); }
   else if (/Cardmarket/.test(it.src || "")) { it.price = null; it.src = ""; } // 旧版存的欧元价不再使用
   if (!it.added) it.added = it.at || Date.now(); // 旧收藏：用原来的时间当添加时间
   it.priceAt = Date.now();
@@ -1883,14 +1970,119 @@ showProxy();
 $("thresholdIn").value = threshold;
 $("thresholdIn").onchange = () => { const v = parseFloat($("thresholdIn").value); threshold = v >= 0 ? v : 5; $("thresholdIn").value = threshold; store.set("ptcg.threshold", threshold); };
 
+// ---------- 价格曲线：点任意一张卡打开 ----------
+let shCard = null, shRange = store.get("ptcg.range", "quarter"), shReq = 0;
+const RANGE_NOTE = { month: "近 1 个月（每天一个点）", quarter: "近 3 个月（每 3 天一个点）", annual: "近 1 年（每周一个点）" };
+function openHistory(x) {
+  shCard = x;
+  const im = cardImg(x); im.id = "shImg"; $("shImg").replaceWith(im);
+  $("shName").innerHTML = `<span class="lang-pill">${LANGS[x.lang]}</span> ${esc(x.name)}`;
+  $("shSub").textContent = `${x.setName || ""} · ${x.abbr || x.setId || ""} ${x.localId || ""}${numTail(x)}`;
+  const usd = x.price && typeof x.price === "object" ? x.price.usd : x.price;
+  $("shPrice").textContent = usd != null ? fmt(usd) : "暂无价格";
+  if (usd != null) $("shPrice").dataset.usd = usd; else delete $("shPrice").dataset.usd;
+  $("shChg").textContent = "";
+  $("sheetBg").hidden = false; document.body.style.overflow = "hidden";
+  loadHistory();
+}
+function closeHistory() { $("sheetBg").hidden = true; document.body.style.overflow = ""; shCard = null; shReq++; }
+function refreshSheet() { if (shCard && !$("sheetBg").hidden) loadHistory(); }
+async function loadHistory() {
+  const x = shCard, my = ++shReq, chart = $("shChart");
+  document.querySelectorAll(".ranges button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.range === shRange)));
+  chart.innerHTML = '<div class="msg">加载中…</div>';
+  ["shHi", "shLo", "shVol"].forEach((id) => ($(id).textContent = "—"));
+  $("shNote").textContent = "";
+  let tp = x.tpId || (x.price && x.price.tpId);
+  if (!tp && x.lang !== "zh-cn") { try { const p = await priceFor(x); tp = p && p.tpId; if (tp) x.tpId = tp; } catch {} }
+  if (my !== shReq) return;
+  const base = proxyUrl();
+  if (!tp || !base) { chart.innerHTML = `<div class="msg">${x.lang === "zh-cn" ? "简中卡暂无价格数据" : "这张卡在 TCGplayer 上没有找到，暂无历史价格"}</div>`; return; }
+  let j = null;
+  try { j = await getJSON(`${base}?history=${tp}&range=${shRange}`, `hist.${tp}.${shRange}`, 6 * 3600e3); } catch {}
+  if (my !== shReq) return;
+  let pts = ((j && j.points) || []).filter((p) => p.p > 0), fromLocal = false;
+  // TCGplayer 的历史取不到时，用本机记下的价格（收藏里的卡每次刷新都会记）
+  if (pts.length < 2 && x.ph && x.ph.length >= 1 && x.price != null) {
+    const span = { month: 31, quarter: 92, annual: 366 }[shRange] * DAY, from = Date.now() - span;
+    const loc = x.ph.filter(([t]) => t >= from).map(([t, p]) => ({ d: new Date(t).toISOString().slice(0, 10), p, q: 0 }));
+    loc.push({ d: new Date().toISOString().slice(0, 10), p: x.price, q: 0 });
+    if (loc.length >= 2) { pts = loc; fromLocal = true; j = { variant: "" }; }
+  }
+  if (pts.length < 2) { chart.innerHTML = `<div class="msg">${j ? "这段时间成交太少，画不出曲线" : "历史价格暂时取不到，请稍后再试"}</div>`; return; }
+  drawChart(chart, pts);
+  const hi = Math.max(...pts.map((p) => p.p)), lo = Math.min(...pts.map((p) => p.p)), vol = pts.reduce((a, p) => a + (p.q || 0), 0);
+  $("shHi").textContent = fmt(hi); $("shHi").dataset.usd = hi;
+  $("shLo").textContent = fmt(lo); $("shLo").dataset.usd = lo;
+  $("shVol").textContent = vol + " 张";
+  // 这段时间的涨跌（只写金额）
+  const d = pts[pts.length - 1].p - pts[0].p, flat = Math.abs(d) < 0.005;
+  $("shChg").textContent = flat ? `— ${fmt(0)}` : `${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))}`;
+  $("shChg").className = "chg " + (flat ? "flat" : d > 0 ? "up" : "down");
+  $("shNote").textContent = fromLocal
+    ? "TCGplayer 的历史价格暂时取不到，这里画的是本机每次刷新记下的价格。"
+    : `TCGplayer 市价${j.variant ? " · " + j.variant : ""} · ${RANGE_NOTE[shRange]}。手指在图上滑动可以看每个点。`;
+}
+// 单条曲线：2px 线 + 淡面积，弱化网格，标出最新一点；手指 / 鼠标滑动显示十字线和数值
+function drawChart(el, pts) {
+  const W = el.clientWidth || 340, H = el.clientHeight || 200, padL = 50, padR = 10, padT = 34, padB = 22;
+  const vals = pts.map((p) => fromUsd(p.p));
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi === lo) { hi *= 1.05; lo *= 0.95; }
+  const pad = (hi - lo) * 0.12; lo = Math.max(0, lo - pad); hi += pad;
+  const n = pts.length, X = (i) => padL + (i / (n - 1)) * (W - padL - padR), Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+  const c = CUR[cur];
+  const short = (v) => c.sym + (v >= 10000 ? Math.round(v / 1000) + "k" : v >= 1000 ? (v / 1000).toFixed(1) + "k" : v.toFixed(c.dec && v < 100 ? 2 : 0));
+  const dl = (d) => d.slice(5).replace("-", "/");
+  const ticks = [0, 1, 2, 3].map((k) => lo + ((hi - lo) * k) / 3);
+  const line = vals.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+  const area = `${line}L${X(n - 1).toFixed(1)},${H - padB}L${X(0).toFixed(1)},${H - padB}Z`;
+  const gid = "g" + Math.random().toString(36).slice(2, 7);
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="价格走势：${pts[0].d} ${fmt(pts[0].p)}，${pts[n - 1].d} ${fmt(pts[n - 1].p)}">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--accent);stop-opacity:.24"/><stop offset="1" style="stop-color:var(--accent);stop-opacity:0"/></linearGradient></defs>
+    ${ticks.map((t) => `<line x1="${padL}" x2="${W - padR}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}" style="stroke:var(--line);stroke-width:1"/>
+      <text x="${padL - 6}" y="${(Y(t) + 3.5).toFixed(1)}" text-anchor="end" style="fill:var(--muted);font:10.5px var(--mono)">${short(t)}</text>`).join("")}
+    <text x="${padL}" y="${H - 5}" style="fill:var(--muted);font:10.5px var(--font)">${dl(pts[0].d)}</text>
+    <text x="${W - padR}" y="${H - 5}" text-anchor="end" style="fill:var(--muted);font:10.5px var(--font)">${dl(pts[n - 1].d)}</text>
+    <path d="${area}" style="fill:url(#${gid})"/>
+    <path d="${line}" style="fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/>
+    <circle cx="${X(n - 1).toFixed(1)}" cy="${Y(vals[n - 1]).toFixed(1)}" r="4.5" style="fill:var(--accent);stroke:var(--surface);stroke-width:2"/>
+    <g data-xh style="display:none"><line data-l y1="${padT - 4}" y2="${H - padB}" style="stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3"/>
+      <circle data-c r="5" style="fill:var(--accent);stroke:var(--surface);stroke-width:2"/></g>
+    <rect x="0" y="0" width="${W}" height="${H}" style="fill:transparent"/>
+  </svg><div class="tip" hidden></div>`;
+  const svg = el.querySelector("svg"), g = svg.querySelector("[data-xh]"), L = svg.querySelector("[data-l]"), C = svg.querySelector("[data-c]"), tip = el.querySelector(".tip");
+  const show = (clientX) => {
+    const r = svg.getBoundingClientRect(), x = ((clientX - r.left) * W) / r.width;
+    const i = Math.max(0, Math.min(n - 1, Math.round(((x - padL) / (W - padL - padR)) * (n - 1))));
+    g.style.display = ""; L.setAttribute("x1", X(i)); L.setAttribute("x2", X(i)); C.setAttribute("cx", X(i)); C.setAttribute("cy", Y(vals[i]));
+    tip.hidden = false;
+    tip.innerHTML = `${pts[i].d} · <b>${fmt(pts[i].p)}</b>${pts[i].q ? ` · 成交 ${pts[i].q}` : ""}`;
+    tip.style.left = Math.max(80, Math.min(r.width - 80, (X(i) * r.width) / W)) + "px";
+  };
+  const hide = () => { g.style.display = "none"; tip.hidden = true; };
+  svg.addEventListener("pointermove", (e) => show(e.clientX));
+  svg.addEventListener("pointerdown", (e) => show(e.clientX));
+  svg.addEventListener("pointerleave", hide);
+  svg.addEventListener("pointercancel", hide);
+}
+document.querySelectorAll(".ranges button").forEach((b) => (b.onclick = () => { shRange = b.dataset.range; store.set("ptcg.range", shRange); loadHistory(); }));
+$("shClose").onclick = closeHistory;
+$("sheetBg").addEventListener("click", (e) => { if (e.target === $("sheetBg")) closeHistory(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sheetBg").hidden) closeHistory(); });
+// 卡片可点击：点到按钮、输入框以外的地方就打开价格曲线
+function makeClickable(el, x) {
+  el.dataset.clickable = 1;
+  el.addEventListener("click", (e) => { if (e.target.closest("button, input, select, label, a, form")) return; openHistory(x); });
+}
+
 // ---------- 导航 ----------
 function go(page) {
   const scan = page === "scan";
   $("pageScan").hidden = !scan; $("pageLib").hidden = scan;
   if (scan) { $("navScan").setAttribute("aria-current", "page"); $("navLib").removeAttribute("aria-current"); }
   else { $("navLib").setAttribute("aria-current", "page"); $("navScan").removeAttribute("aria-current"); }
-  // 每次进收藏页都默认按添加时间从新到旧
-  if (!scan) { stopScan(); libSort = "added-desc"; renderLib(); refreshAll(false); }
+  if (!scan) { stopScan(); renderLib(); refreshAll(false); }
 }
 $("navScan").onclick = () => go("scan");
 $("navLib").onclick = () => go("lib");
