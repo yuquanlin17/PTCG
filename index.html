@@ -466,7 +466,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.23c · AI 防认错";
+const APP_VERSION = "10.23d · 简中151按卡名找";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
@@ -1547,6 +1547,7 @@ async function offerSwitch(c, el) {
   b.textContent = `其实是${LANGS[alt.lang]}卡`;
   b.onclick = () => {
     if (c._autoKey) { lib = lib.filter((x) => x.key !== c._autoKey); saveLib(); }
+    removeFromTray(c);
     mountCard(alt, false, null, el);
     setStatus(`已改为 <b>${LANGS[alt.lang]}</b>`);
   };
@@ -1579,6 +1580,8 @@ function renderTray() {
     row.appendChild(b);
   }
 }
+// 改成别的版本（其实是繁中 / 简中）时，原来那张从托盘里拿掉
+function removeFromTray(c) { if (!inSession.has(c)) return; inSession.delete(c); session = session.filter((x) => x !== c); renderTray(); }
 $("trayClear").onclick = () => { session = []; renderTray(); };
 
 function autoSave(c, el) {
@@ -2122,6 +2125,35 @@ async function visAgrees(c, canvas) {
     return s * inv[i] >= top.sim - 0.1;
   } catch { return true; }
 }
+// 日版 / 美版 151 的卡 → 简中 151（151C）里同名的卡：两边编号不一样（日版 193 的迷唇姐 ex 在简中是 183），按英文卡名在 PriceCharting 找
+async function cands151C(c) {
+  let en = c.enName || c.tpName || (c.lang === "en" ? c.name : "");
+  if (!en) { const p = await priceFor(c).catch(() => null); en = (p && p.name) || ""; }
+  const base = proxyUrl();
+  if (!en || !base) return [];
+  const nm = cleanTpName(en).replace(/\s*\(.*?\)\s*/g, " ").replace(/\s+-\s+.*$/, "").trim();
+  let j;
+  try { j = await getJSON(`${base}?pcs=${encodeURIComponent("pokemon chinese 151 collect " + nm)}`, `pcs.151c.${nm.toLowerCase()}`, 6 * 3600e3); } catch { return []; }
+  const want = nm.toLowerCase(), out = [];
+  for (const p of j.items || []) {
+    const m = /Chinese 151/i.test(p.set) && String(p.name).match(/^(.*?)\s*(\[.*?\])?\s*#(\d+)\s*$/);
+    if (!m || m[2] || m[1].toLowerCase() !== want) continue; // 大师球 / 精灵球纹这类异图版跳过
+    const n = parseInt(m[3], 10), lid = String(n).padStart(3, "0");
+    out.push({ lang: "zh-cn", id: `151C-${lid}`, localId: lid, name: m[1], pcq: `${ZH_CN_PC["151C"].pc} #${n}`, pcImg: p.img || "",
+      setId: "151C", setName: ZH_CN_PC["151C"].name, official: 151, rel: null });
+  }
+  return out;
+}
+async function switchTo151C(x) {
+  if (x._autoKey) { lib = lib.filter((y) => y.key !== x._autoKey); saveLib(); }
+  removeFromTray(x);
+  setStatus("在简中 151 里找同名的卡…");
+  const list = await cands151C(x);
+  if (!list.length) return showResults(parseText(`151C ${parseInt(x.localId, 10)}`, true), false);
+  const res = await showResults({ nums: [{ n: parseInt(list[0].localId, 10), total: 151 }], tokens: [], twPrev: [], raw: "" }, false, list);
+  if (list.length > 1) setStatus(`简中 151 里有 ${list.length} 张「${esc(list[0].name)}」（普通 / 闪卡等），点你手上那张：`);
+  return res;
+}
 // 拿不准是哪张卡时：每个卡名取最像的一个版本，列出最像的几张让你点
 const visGuess = (r, max = 4) => {
   const seen = new Set(), list = [];
@@ -2238,7 +2270,7 @@ async function bgResolve(shots, list, hints = []) {
 async function visShow(r, auto, hints = [], pick = visPick(r, hints), retry = null) {
   const hit = (t) => candFromProduct({ p: t.p, s: { line: t.p.line } });
   let list = [];
-  for (const t of pick.list) { const c = await hit(t); if (!list.some((x) => x.id === c.id)) list.push(c); }
+  for (const t of pick.list) { const c = await hit(t); c.enName = t.p.name; if (!list.some((x) => x.id === c.id)) list.push(c); }
   const tw = hints.some((p) => p.twPrev && p.twPrev.length);
   // 繁中卡和日版同图：卡底读到了繁中标记就换成繁中
   if (tw) list = await Promise.all(list.map(async (c) => (c.lang === "ja" ? (await counterpart(c).catch(() => null)) || c : c)));
@@ -2254,7 +2286,7 @@ async function visShow(r, auto, hints = [], pick = visPick(r, hints), retry = nu
     const x = list[i], act = el.querySelector("[data-act]");
     if (!x || !act || !((x.lang === "ja" && /^SV2a$/i.test(x.setId)) || /Scarlet & Violet 151/i.test(x.setName))) return;
     const b = document.createElement("button"); b.className = "btn small"; b.textContent = "其实是简中卡（151C）";
-    b.onclick = () => { if (x._autoKey) { lib = lib.filter((y) => y.key !== x._autoKey); saveLib(); } showResults(parseText(`151C ${parseInt(x.localId, 10)}`, true), false); };
+    b.onclick = () => { cancelBg(); switchTo151C(x); };
     act.appendChild(b);
   });
   if (retry && list.length > 1) {
