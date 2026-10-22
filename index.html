@@ -849,6 +849,13 @@ async function withLookalikes(cands) {
   }
   return out;
 }
+// 形近编号里有没有一张比读到的卡明显更像（领先 0.08 以上）
+function clearlyBetter(ir, c, s) {
+  if (!ir || !ir.scores) return false;
+  const orig = ir.scores.find((x) => x.c.id === c.id), base = orig ? orig.s : s;
+  return ir.scores.some((x) => x.c.id !== c.id && x.s - base >= 0.08);
+}
+
 // 用卡图在候选里挑；挑不出且都不像时，加上形近数字的卡再挑一次
 async function resolveByImage(cands, sigs) {
   let ir = await imageRerank(cands, sigs);
@@ -1106,8 +1113,9 @@ async function identify(parsed) {
     }
   }
   out.push(...tpCands);
-  // 什么都没找到：编号和总数都可能读错了（110/080 读成 770/50），换形近数字再找日版候选，交给卡图挑
-  if (!out.length && !parsed.en) {
+  // 什么都没找到、或者只有很弱的候选：编号和总数都可能读错了（110/080 读成 770/50，076 读成 075），
+  // 换形近数字再找日版候选，交给卡图挑
+  if ((!out.length || out.every((c) => (c.score || 0) < 3)) && !parsed.en && !tpCands.length) {
     const officials = new Set(idx.ja.list.map((s) => s.cardCount && s.cardCount.official));
     for (const num of parsed.nums.filter((x) => x.total)) {
       const totals = [num.total, ...lookalikeNums(num.total)].filter((t) => officials.has(t));
@@ -1469,6 +1477,13 @@ async function startScan() {
             const ir = await resolveByImage(ref.cands, sigsNow).catch(() => null);
             if (my !== loopId) return;
             if (ir && ir.pick) return done(ir);
+            // 系列代码 + 编号都读到了（证据强）：实拍卡套反光，相似度本来就偏低。
+            // 只要形近编号里没有明显更像的卡，就采用读到的这张，不再「继续扫描」
+            if (!weakEvidence(ref.cands[0]) && s !== null && !clearlyBetter(ir, ref.cands[0], s)) {
+              const r = await showResults(ref.parsed, true, ref.cands);
+              if (my !== loopId) return;
+              if (r === "found") { finishScan(); return; }
+            }
             const sets = (await setsFor(ref.cands, parsed.totalHints)).filter((x) => !searchedSets.has(x.slug));
             if (my !== loopId) return;
             if (sets.length) {
@@ -1704,6 +1719,8 @@ async function scanFromImage(img, quiet) {
           // 卡图不像：试形近数字，再试整个系列比对，还不行就换个角度再读
           const ir = await resolveByImage(ref.cands, sigs());
           if (ir && ir.pick) return showPicked(ref.parsed, ir);
+          // 证据强（系列代码 + 编号）且形近编号里没有明显更像的：采用读到的这张
+          if (!weakEvidence(ref.cands[0]) && s !== null && !clearlyBetter(ir, ref.cands[0], s)) return showResults(ref.parsed, false, ref.cands);
           const sets = await setsFor(ref.cands, parsed.totalHints);
           const r = sets.length ? await setImageSearch(sets, sigs()).catch(() => null) : null;
           if (r && r.ok) return showSetHit(r, false, ref.all || ref.cands);
