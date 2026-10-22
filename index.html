@@ -466,7 +466,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.23 · 新界面";
+const APP_VERSION = "10.23b · AI 后台确认";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
@@ -2146,10 +2146,12 @@ async function bgResolve(shots, list, hints = []) {
   peek("正在后台读卡底，读出来会自动帮你选好（也可以直接点）…");
   const seen = [], reads = new Map();
   // 读到简中代码：简中卡和日版同图，换成简中（之前已经读到的文字也先查一遍）
-  const zhcn = async (p) => {
+  // （AI 看不清时会编代码，比如把 151C 145/151 编成 CSV8C 151/151：AI 读到的只在查得到真实卡片资料时才采用）
+  const zhcn = async (p, fromAi) => {
     if (!p.nums.length || !p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t))) return false;
     const cands = await identify(p).catch(() => []);
     if (my !== bgToken || cands.length !== 1) return my !== bgToken;
+    if (fromAi && cands[0].manual) return false;
     bgToken++; $("visPeek").hidden = true;
     await showResults(p, false, cands); $("status").insertAdjacentHTML("beforeend", " · 后台读到简中代码");
     return true;
@@ -2164,7 +2166,7 @@ async function bgResolve(shots, list, hints = []) {
     const text = await aiRead(crop, 1024);
     if (!text || my !== bgToken) return;
     const p = parseText(text, true);
-    if (await zhcn(p)) return;
+    if (await zhcn(p, true)) return;
     seen.push(p);
     const i = pickByText(list, seen);
     if (i >= 0) choose(i, `后台 AI 读卡底确认（${esc(text.slice(0, 30))}）`);
