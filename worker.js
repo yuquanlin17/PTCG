@@ -19,6 +19,9 @@ export default {
     // ?pc=搜索词&n=编号：PriceCharting 的长期月度价格（3 年 / 5 年 / 全部）
     const pcq = (url.searchParams.get("pc") || "").trim().slice(0, 120);
     if (pcq) return pcHistory(pcq, (url.searchParams.get("n") || "").replace(/\D/g, ""), ctx, cors);
+    // ?pcs=搜索词：PriceCharting 按名字搜，返回列表（简中 151 按卡名找卡用）
+    const pcs = (url.searchParams.get("pcs") || "").trim().slice(0, 120);
+    if (pcs) return pcSearch(pcs, ctx, cors);
     const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
     const line = url.searchParams.get("line") === "pokemon-japan" ? "pokemon-japan" : "pokemon";
     // ?set=m6-storm-emeralda：列出整个系列的卡（用来按卡图比对），缓存 1 天
@@ -122,6 +125,25 @@ async function pcHistory(q, n, ctx, cors) {
     const price = pm ? parseFloat(pm[1].replace(/,/g, "")) : null;
     const im = html.match(/https:\/\/storage\.googleapis\.com\/images\.pricecharting\.com\/[a-z0-9]+\/240\.jpg/);
     const resp = jsonResp({ at: Date.now(), url: url.split("?")[0], title, price, img: im ? im[0] : "", points }, cors, 200, 21600);
+    ctx.waitUntil(cache.put(key, resp.clone()));
+    return resp;
+  } catch (e) {
+    return jsonResp({ error: "pricecharting unreachable" }, cors, 502);
+  }
+}
+
+// 按名字搜：要 JSON 时 PriceCharting 直接回搜索结果列表（卡名带编号「Jynx EX #183」、系列、卡图、裸卡价）
+async function pcSearch(q, ctx, cors) {
+  const cache = caches.default;
+  const key = new Request(`https://ptcg-cache.local/pcs?q=${encodeURIComponent(q.toLowerCase())}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  try {
+    const r = await fetch(`https://www.pricecharting.com/search-products?q=${encodeURIComponent(q)}&type=prices`, { headers: { ...BROWSER_HEADERS, accept: "application/json" } });
+    const j = await r.json();
+    const items = (j.products || []).slice(0, 30).map((p) => ({ id: p.id, name: p.productName, set: p.consoleName, img: p.imageUri || "",
+      price: parseFloat(String(p.price1 || "").replace(/[$,]/g, "")) || null }));
+    const resp = jsonResp({ at: Date.now(), items }, cors, 200, 21600);
     ctx.waitUntil(cache.put(key, resp.clone()));
     return resp;
   } catch (e) {
