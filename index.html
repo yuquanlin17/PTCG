@@ -346,14 +346,17 @@ document.querySelectorAll("#curSeg button").forEach((b) => {
 const mem = {};
 async function getJSON(url, cacheKey, ttl) {
   if (cacheKey) {
-    if (mem[cacheKey] && Date.now() - mem[cacheKey].at < ttl) return mem[cacheKey].data;
+    const isEmpty = (d) => d && Array.isArray(d.points) && !d.points.length; // 旧版缓存下来的空结果不用
+    if (mem[cacheKey] && Date.now() - mem[cacheKey].at < ttl && !isEmpty(mem[cacheKey].data)) return mem[cacheKey].data;
     const c = store.get("c." + cacheKey, null);
-    if (c && Date.now() - c.at < ttl) { mem[cacheKey] = c; return c.data; }
+    if (c && Date.now() - c.at < ttl && !isEmpty(c.data)) { mem[cacheKey] = c; return c.data; }
   }
   const r = await fetch(url);
   if (!r.ok) throw new Error("HTTP " + r.status);
   const data = await r.json();
-  if (cacheKey) { const e = { at: Date.now(), data }; mem[cacheKey] = e; store.set("c." + cacheKey, e); }
+  // 空结果（没查到历史价格等）不缓存，下次再试
+  const empty = data && Array.isArray(data.points) && !data.points.length;
+  if (cacheKey && !empty) { const e = { at: Date.now(), data }; mem[cacheKey] = e; store.set("c." + cacheKey, e); }
   return data;
 }
 const getSets = (l) => getJSON(`${API}/${l}/sets`, "sets." + l, 24 * 3600e3);
