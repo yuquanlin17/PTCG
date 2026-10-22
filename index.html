@@ -364,17 +364,23 @@ async function tcgPrice(x) {
   const code = String(x.setRef || x.setId || "");
   const n = parseInt(x.localId, 10);
   const numStr = x.official ? `${x.localId}/${String(x.official).padStart(String(x.localId).length, "0")}` : String(x.localId);
-  const queries = x.lang === "en" ? [`${x.name} ${numStr}`] : [`${code} ${x.localId}`, `${code} ${numStr}`];
+  const queries = x.lang === "en" ? [`${x.name} ${numStr}`, ...(/promo/i.test(x.setName || "") ? [`${x.name} Promo ${x.localId}`] : [])] : [`${code} ${x.localId}`, `${code} ${numStr}`];
   for (const q of queries) {
     const items = await tcgSearch(q, line);
     if (!items) return null;
     const sameNum = items.filter((p) => parseInt(String(p.number).split("/")[0], 10) === n);
     const setOk = (p) => {
       const s = String(p.set || "").toLowerCase();
-      if (x.lang === "en") return s.includes(String(x.setName || "").toLowerCase()) || (x.abbr && s.includes(x.abbr.toLowerCase()));
+      if (x.lang === "en") {
+        // 特典卡：TCGdex 叫「MEP Black Star Promos」，TCGplayer 叫「ME: Mega Evolution Promo」，都带 promo 就算对上
+        if (/promo/i.test(x.setName || "") && /promo/.test(s) && !/\//.test(String(p.number))) return true;
+        return s.includes(String(x.setName || "").toLowerCase()) || (x.abbr && s.includes(x.abbr.toLowerCase()));
+      }
       return s.startsWith(code.toLowerCase() + ":") || s.startsWith(code.toLowerCase() + " ");
     };
-    const p = sameNum.find(setOk) || (sameNum.length === 1 ? sameNum[0] : null);
+    // 同一张卡有普通版和限定版（名字带括号）时，先取普通版
+    const ok = sameNum.filter(setOk).sort((a, b) => /\(/.test(a.name) - /\(/.test(b.name));
+    const p = ok[0] || (sameNum.length === 1 ? sameNum[0] : null);
     if (p) return { usd: p.price, tpId: p.id, set: p.set, src: "TCGplayer", detail: p.price != null ? `市价 · ${p.rarity || p.set}` : "暂无成交价" };
   }
   return { usd: null, tpId: null, src: "", detail: "" };
@@ -445,6 +451,19 @@ async function setImageSearch(sets, sigs, onProgress) {
   const ok = best.sim >= 0.8 && (!second || best.sim - second.sim >= 0.05);
   return { ok, best, second, scored };
 }
+// 只读到一个单独的编号：去美版特典系列找这个编号的卡（必须卡图对得上才采用）
+const PROMO_SETS = ["MEP", "SVP"];
+async function promoCandidates(n) {
+  const idx = await getIndex(), out = [];
+  for (const id of PROMO_SETS) {
+    const s = idx.en.map.get(id);
+    if (!s) continue;
+    const c = await candidate("en", s, { n, total: null });
+    if (c) { c.score = 2; out.push(c); }
+  }
+  return out;
+}
+
 // 系列比对的结果 → 卡片对象（日版尽量换成 TCGdex 的日文资料）
 async function candFromProduct(hit) {
   const { p, s } = hit, [a, b] = String(p.number).split("/");
@@ -861,8 +880,8 @@ function parseText(text, manual) {
   while ((m = re.exec(t))) nums.push({ n: parseInt(fix(m[2]), 10), total: parseInt(fix(m[3]), 10) });
   const rp = /(\d{1,3})\s*\/\s*([A-Za-z]{1,3}-P)\b/g;             // 日版特典卡：001/SV-P
   while ((m = rp.exec(t))) nums.push({ n: parseInt(m[1], 10), total: null, promo: m[2].toUpperCase() });
-  const re2 = /\b([A-Za-z]{3})\s*EN\s*(\d{3})(?!\s*\/)/g;          // 美版特典卡：SVP EN 001
-  while ((m = re2.exec(t))) nums.push({ n: parseInt(m[2], 10), total: null });
+  const re2 = /\b([A-Za-z]{3})\s*EN\s*([0-9Oo]{3})(?!\s*\/)/g;     // 美版特典卡：SVP EN 001 / MEP EN 070（0 常被认成 O）
+  while ((m = re2.exec(t))) nums.push({ n: parseInt(fix(m[2]), 10), total: null });
   const tokens = t.toUpperCase().split(/[\s\/]+/).map((s) => s.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, "")).filter(Boolean);
   if (manual && !nums.length) {
     const mm = t.match(/(?:^|\s)(\d{1,3})\s*$/);                   // 手动输入：SV8a 236
@@ -873,13 +892,17 @@ function parseText(text, manual) {
     const rs = /(?:^|[^0-9])(\d{1,3})\s?[71Il|]\s?(0\d{2})(?![0-9])/g;
     while ((m = rs.exec(t))) nums.push({ n: parseInt(m[1], 10), total: parseInt(m[2], 10), loose: true });
   }
+  // 不可能的读数（编号 0、总数不到 10）多半是杂讯，丢掉
+  for (let i = nums.length - 1; i >= 0; i--) if (!(nums[i].n > 0) || (nums[i].total != null && nums[i].total < 10)) nums.splice(i, 1);
   // 总数线索：「/076」「7076」这类，编号读不全时用来锁定系列
   const totalHints = [...new Set((t.match(/[\/71Il|](0\d{2})(?![0-9])/g) || []).map((s) => parseInt(s.slice(1), 10)))];
   nums.forEach((x) => { if (x.total && !totalHints.includes(x.total)) totalHints.push(x.total); });
   // 繁中：系列代码后面跟一个单独的 F（注意：代码前面的 F 是赛制标记，不算）
   const twPrev = [];
   tokens.forEach((s, i) => { if (s === "F" && i > 0) twPrev.push(tokens[i - 1]); });
-  return { nums, tokens, twPrev, totalHints, en: tokens.includes("EN"), raw: t };
+  // 单独的三位数（特典卡只印「MEP EN 070」，黑框里的代码常读不出来，只剩 070）
+  const lone = nums.length ? [] : [...new Set(tokens.filter((s) => /^\d{3}$/.test(s)).map((s) => parseInt(s, 10)).filter((x) => x > 0 && x < 400))];
+  return { nums, tokens, twPrev, totalHints, lone, manual: !!manual, en: tokens.includes("EN"), raw: t };
 }
 
 // 编辑距离：代码读错一两个字时用来找最接近的系列
@@ -919,7 +942,8 @@ async function identify(parsed) {
   for (const U of codeTokens) {
     // 美版：系列简称 + EN
     const enKey = EN_ABBR[U] ? U : (U.length > 4 && U.endsWith("EN") && EN_ABBR[U.slice(0, -2)] ? U.slice(0, -2) : null);
-    if (enKey && (parsed.en || enKey !== U)) addHit("en", idx.en.map.get(EN_ABBR[enKey].toUpperCase()), 3);
+    // 手动输入时不写 EN 也行（mep 070），只要不和日版系列代码重名
+    if (enKey && (parsed.en || enKey !== U || (parsed.manual && !inJaTw(U)))) addHit("en", idx.en.map.get(EN_ABBR[enKey].toUpperCase()), 3);
     // 简中：C 开头 C 结尾的商品编号
     if (/^C[A-Z0-9.]{2,}C$/.test(U)) addHit("zh-cn", idx["zh-cn"].map.get(U) || nearestSet(idx["zh-cn"].list, U, parsed) || { id: U, name: "" }, 3);
     // 日版 / 繁中：代码相同，繁中多一个 F
@@ -1017,6 +1041,8 @@ function lookalikeNums(n) {
     out.add(parseInt(b, 10));
     for (let i = 0; i < b.length; i++) for (const d of DIGIT_LOOKALIKE[b[i]] || "") if (b[i] !== "1" && b[i] !== "7") out.add(parseInt(b.slice(0, i) + d + b.slice(i + 1), 10));
   }
+  // 开头的 1 常被吞掉（112 读成 72 / 12）：两位数也试试前面补 1
+  if (n < 100) for (const v of [n, ...out]) if (v < 100) out.add(100 + v);
   out.delete(n);
   return [...out].filter((x) => x > 0);
 }
@@ -1296,7 +1322,7 @@ async function startScan() {
   const recent = [];           // 最近几帧的读数
   let frame = -1, unsure = 0, unsureBest = null, votes = [], voteSig = "", stick = false;
   const startedAt = Date.now(); let lastHit = Date.now();
-  let framesDone = 0, noNumFrames = 0, deepTried = false; const hintTotals = new Map(), seenCands = [], searchedSets = new Set();
+  let framesDone = 0, noNumFrames = 0, deepTried = false; const hintTotals = new Map(), seenCands = [], searchedSets = new Set(), triedLone = new Set();
   while (scanning && my === loopId) {
     // 上一帧读到了编号，就继续用同一种处理方式，方便连续两次读到同样的结果
     if (!stick) frame++;
@@ -1401,6 +1427,27 @@ async function startScan() {
           finishScan(); return;
         }
         setStatus("把卡放进框里，底部编号对准黄色虚线…");
+      }
+    }
+    // 只读到单独的三位数（特典卡），而且上一帧也读到同一个：去特典系列找，卡图对得上才采用
+    if (!parsed.nums.length && parsed.lone.length && proxyUrl()) {
+      const prevLone = recent.slice(0, -1).flatMap((p) => p.lone || []);
+      for (const n of parsed.lone.filter((x) => prevLone.includes(x) && !triedLone.has(x)).slice(0, 2)) {
+        triedLone.add(n);
+        const cands = await promoCandidates(n).catch(() => []);
+        if (my !== loopId) return;
+        if (!cands.length) continue;
+        const sg = liveCardSigs().concat(slideSigs($("video"), 0, true));
+        const sims = [];
+        for (const c of cands) sims.push([c, await imageSim(c, sg).catch(() => null)]);
+        if (my !== loopId) return;
+        sims.sort((a, b) => (b[1] ?? -1) - (a[1] ?? -1));
+        const [best, s] = sims[0], s2 = sims[1] ? sims[1][1] ?? 0 : 0;
+        if (s !== null && s >= 0.55 && s - s2 >= 0.1) {
+          await showResults({ nums: [{ n, total: null }], tokens: [], twPrev: [], raw: "" }, true, [best]);
+          $("status").insertAdjacentHTML("beforeend", ` · 卡图比对确认（相似度 ${Math.round(s * 100)}%）`);
+          finishScan(); return;
+        }
       }
     }
     // 连续很多帧都读不到编号：截下整个画面，用照片模式完整分析一次（只做一次）
@@ -1523,7 +1570,9 @@ async function scanFromImage(img, quiet) {
       const ir = await resolveByImage(unsureBest.cands, sigs());
       if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
       // 卡图也分不出（比如复刻和原版几乎一样）：再读也没用，直接列出来让你选
-      if (ir && ir.scores.length >= 2) return showResults(unsureBest.parsed, false, await orderByImage(ir.scores.map((x) => x.c), querySigs));
+      // （从相机兜底调用时，卡图也都不像就别列了，多半是读到了杂讯）
+      if (ir && ir.scores.length >= 2 && (!quiet || ir.sim >= 0.45)) return showResults(unsureBest.parsed, false, await orderByImage(ir.scores.map((x) => x.c), querySigs));
+      if (quiet) unsureBest = null;
     }
     if (unsureBest && k >= bands.length * 6) break; // 试过 ±8° 和反光处理还拿不准，就列出候选
   }
@@ -1542,6 +1591,7 @@ async function scanFromImage(img, quiet) {
   if (unsureBest) {
     const ir = await resolveByImage(unsureBest.cands, querySigs);
     if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
+    if (quiet) return "none";
     return showResults(unsureBest.parsed, false, await orderByImage(unsureBest.cands, querySigs));
   }
   if (quiet) return "none";
@@ -1758,7 +1808,7 @@ renderFx();
 loadFx();
 getIndex();          // 预先加载四种语言的系列列表
 refreshAll(false);
-window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank, slideSigs, setImageSearch, setsFor, productSig, tcgSetList };
+window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank, slideSigs, setImageSearch, setsFor, productSig, tcgSetList, resolveByImage, withLookalikes };
 </script>
 </body>
 </html>
