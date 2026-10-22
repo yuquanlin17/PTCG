@@ -222,27 +222,36 @@ const READ_PROMPT =
 async function readCard(request, env, cors) {
   const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json", ...cors } });
   if (!env.AI) return json({ error: "Workers AI 未绑定（Settings → Bindings → Workers AI，变量名 AI）" }, 501);
-  let bytes;
+  let bytes, b64;
   try {
     const { image } = await request.json();
-    const bin = atob(String(image || "").replace(/^data:image\/\w+;base64,/, ""));
+    b64 = String(image || "").replace(/^data:image\/\w+;base64,/, "");
+    const bin = atob(b64);
     if (!bin.length || bin.length > 400000) return json({ error: "image too large or empty" }, 400);
     bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   } catch { return json({ error: "bad request" }, 400); }
-  const run = () => env.AI.run(VISION_MODEL, { messages: [{ role: "user", content: READ_PROMPT }], image: [...bytes], max_tokens: 24, temperature: 0 });
-  try {
-    let out;
-    try { out = await run(); }
-    catch (e) {
-      // 第一次用 Llama 3.2 Vision 要先同意 Meta 的许可协议
-      if (/agree/i.test(String(e && e.message || e))) { await env.AI.run(VISION_MODEL, { prompt: "agree" }); out = await run(); }
-      else throw e;
-    }
-    return json({ text: String((out && (out.response || out.result || out.text)) || "").trim().slice(0, 80) });
-  } catch (e) {
-    return json({ error: "ai failed: " + String(e && e.message || e).slice(0, 120) }, 502);
+  // Workers AI 的图片输入格式改过几次：先用现在的写法（图片放在消息里），不行再试旧写法
+  const formats = [
+    () => ({ messages: [{ role: "user", content: [{ type: "text", text: READ_PROMPT }, { type: "image_url", image_url: { url: "data:image/jpeg;base64," + b64 } }] }], max_tokens: 24, temperature: 0 }),
+    () => ({ prompt: READ_PROMPT, image: [...bytes], max_tokens: 24, temperature: 0 }),
+    () => ({ messages: [{ role: "user", content: READ_PROMPT }], image: [...bytes], max_tokens: 24, temperature: 0 }),
+  ];
+  const errors = [];
+  for (const f of formats) {
+    try {
+      let out;
+      try { out = await env.AI.run(VISION_MODEL, f()); }
+      catch (e) {
+        // 第一次用 Llama 3.2 Vision 要先同意 Meta 的许可协议
+        if (!/agree/i.test(String(e && e.message || e))) throw e;
+        await env.AI.run(VISION_MODEL, { prompt: "agree" });
+        out = await env.AI.run(VISION_MODEL, f());
+      }
+      return json({ text: String((out && (out.response || out.result || out.text)) || "").trim().slice(0, 80) });
+    } catch (e) { errors.push(String(e && e.message || e).slice(0, 80)); }
   }
+  return json({ error: "ai failed: " + errors.join(" | ") }, 502);
 }
 
 async function listSet(set, line, ctx, cors) {
