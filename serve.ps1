@@ -45,6 +45,23 @@ function List-TcgpSet($set, $line) {
   }
   return (@{ at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); items = @($items) } | ConvertTo-Json -Depth 5 -Compress)
 }
+function Pc-Card($q, $n) {
+  $h = @{ "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36"; "Accept" = "text/html" }
+  $r = Invoke-WebRequest -UseBasicParsing -Headers $h ("https://www.pricecharting.com/search-products?type=prices&q=" + [uri]::EscapeDataString($q))
+  $url = $r.BaseResponse.ResponseUri.AbsoluteUri.Split("?")[0]; $c = $r.Content
+  $empty = (@{ points = @() } | ConvertTo-Json -Compress)
+  if ($c.IndexOf("VGPC.chart_data") -lt 0) { return $empty }
+  if ($n -and $url -notmatch "-$([int]$n)$") { return $empty }
+  $t = $c.IndexOf('id="product_name"'); $title = ""
+  if ($t -gt 0) { $s = $c.IndexOf(">", $t) + 1; $title = (($c.Substring($s, $c.IndexOf("</h1>", $t) - $s) -replace '<[^>]+>', ' ') -replace '\s+', ' ').Trim() }
+  $u = $c.IndexOf('id="used_price"'); $price = $null
+  if ($u -gt 0) { $m = [regex]::Match($c.Substring($u, 400), '\$([\d,]+\.\d\d)'); if ($m.Success) { $price = [double]($m.Groups[1].Value -replace ',', '') } }
+  $im = [regex]::Match($c, 'https://storage\.googleapis\.com/images\.pricecharting\.com/[a-z0-9]+/240\.jpg').Value
+  $i = $c.IndexOf("VGPC.chart_data"); $s = $c.IndexOf("{", $i); $e = $c.IndexOf("};", $s)
+  $data = $c.Substring($s, $e - $s + 1) | ConvertFrom-Json
+  $pts = @($data.used | Where-Object { $_[1] -gt 0 } | ForEach-Object { [ordered]@{ d = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$_[0]).UtcDateTime.ToString("yyyy-MM-dd"); p = $_[1] / 100; q = 0 } })
+  return (@{ at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); url = $url; title = $title; price = $price; img = $im; points = $pts } | ConvertTo-Json -Depth 5 -Compress)
+}
 while ($listener.IsListening) {
   $ctx = $listener.GetContext()
   $path = [Uri]::UnescapeDataString($ctx.Request.Url.AbsolutePath.TrimStart("/"))
@@ -52,7 +69,21 @@ while ($listener.IsListening) {
     if ($path -eq "tcgp") {
       $q = $ctx.Request.QueryString["q"]; $line = $(if ($ctx.Request.QueryString["line"] -eq "pokemon-japan") { "pokemon-japan" } else { "pokemon" })
       $set = $ctx.Request.QueryString["set"]
-      $json = $(if ($set) { List-TcgpSet $set $line } else { Search-Tcgp $q $line })
+      $hist = $ctx.Request.QueryString["history"]
+      $pc = $ctx.Request.QueryString["pc"]
+      if ($pc) {
+        $json = Pc-Card $pc (($ctx.Request.QueryString["n"]) -replace '\D', '')
+      } elseif ($hist) {
+        $range = $ctx.Request.QueryString["range"]; if (@("month", "quarter", "annual") -notcontains $range) { $range = "quarter" }
+        $j = Invoke-RestMethod ("https://infinite-api.tcgplayer.com/price/history/" + ($hist -replace '\D', '') + "?range=" + $range)
+        $vol = @{}
+        foreach ($r in $j.result) { foreach ($v in $r.variants) { $vol[$v.variant] = [double]$vol[$v.variant] + [int]$v.quantity + 0.001 } }
+        $variant = ($vol.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1).Key
+        $pts = @($j.result | ForEach-Object { $d = $_.date; $v = $_.variants | Where-Object { $_.variant -eq $variant } | Select-Object -First 1; if ($v -and [double]$v.marketPrice -gt 0) { [ordered]@{ d = $d; p = [double]$v.marketPrice; q = [int]$v.quantity } } } | Sort-Object { $_.d })
+        $json = (@{ at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); variant = $variant; points = $pts } | ConvertTo-Json -Depth 5 -Compress)
+      } else {
+        $json = $(if ($set) { List-TcgpSet $set $line } else { Search-Tcgp $q $line })
+      }
       $bytes = [Text.Encoding]::UTF8.GetBytes($json)
       $ctx.Response.ContentType = "application/json; charset=utf-8"
       $ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*")
