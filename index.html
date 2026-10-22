@@ -512,6 +512,115 @@ async function setImageSearch(sets, sigs, onProgress) {
   const ok = best.sim >= 0.8 && (!second || best.sim - second.sim >= 0.05);
   return { ok, best, second, scored };
 }
+// ---------- 卡名识别：只在拿不准时读一次卡片顶部的名字，用来确认 / 排除候选 ----------
+// 日文 + 繁中字库第一次用到时才下载（约 5~8MB），之后存在手机里
+let nameWorker = null, nameWorkerLoading = null;
+function getNameWorker() {
+  if (nameWorker) return Promise.resolve(nameWorker);
+  if (nameWorkerLoading) return nameWorkerLoading;
+  nameWorkerLoading = (async () => {
+    const w = await Tesseract.createWorker(["jpn", "chi_tra"], 1, {});
+    await w.setParameters({ tessedit_pageseg_mode: "6" });
+    nameWorker = w;
+    return w;
+  })();
+  nameWorkerLoading.catch(() => { nameWorkerLoading = null; });
+  return nameWorkerLoading;
+}
+// psm 7 = 单行（卡名那一条），6 = 一块文字（照片上半部分）
+async function ocrName(canvas, english, psm = "7") {
+  const w = english ? await getWorker() : await getNameWorker();
+  if (english) return (await w.recognize(canvas)).data.text || "";
+  await w.setParameters({ tessedit_pageseg_mode: psm });
+  return (await w.recognize(canvas)).data.text || "";
+}
+// 相机：引导框顶部只有卡名的那一小块（避开左边的「たね / 1進化」和右边的 HP）
+function liveNameCrop(variant = {}) {
+  const v = $("video"), vf = $("vf"), g = $("guide");
+  const vw = v.videoWidth, vh = v.videoHeight; if (!vw) return null;
+  const box = vf.getBoundingClientRect(), gb = g.getBoundingClientRect();
+  const s = Math.max(box.width / vw, box.height / vh), ox = (vw * s - box.width) / 2, oy = (vh * s - box.height) / 2;
+  const gx = (gb.left - box.left + ox) / s, gy = (gb.top - box.top + oy) / s, gw = gb.width / s, gh = gb.height / s;
+  return prep(v, gx + gw * 0.14, gy + gh * (0.025 + (variant.dy || 0)), gw * 0.56, gh * 0.085, { target: 900, ...variant });
+}
+// 日文 / 繁体 / 简体的同一个字统一成一个（识别引擎同时装了日文和繁中字库，常把「隱」读成「隠」）
+const KANJI_VARIANTS = ["隠隱隐", "変變变", "竜龍龙", "鉄鐵铁", "気氣气", "帯帶带", "弾彈弹", "剣劍剑", "闘鬥斗", "亀龜龟", "猫貓", "歩步",
+  "黒黑", "円圓圆", "霊靈灵", "獣獸兽", "虫蟲", "発發发", "転轉转", "駆驅驱", "戦戰战", "鳥鸟", "電电", "風风", "東东", "爆", "龍龙", "島岛",
+  "飛飞", "雲云", "楽樂乐", "恵惠", "幻", "強强", "険險险", "鋼钢", "銀银", "結结", "聖圣", "夢梦", "霧雾", "葉叶", "紅红", "綠緑绿", "藍蓝",
+  "歯齒齿", "髪髮发", "団團团", "実實实", "単單单", "様樣样", "豊豐丰", "鉱礦矿", "広廣广", "応應应", "鬼", "蛇", "雷", "魔", "賊贼", "盗盜", "読讀读"];
+const KANJI_MAP = new Map();
+for (const g of KANJI_VARIANTS) for (const ch of g) KANJI_MAP.set(ch, g[0]);
+const normName = (s) => [...String(s || "").normalize("NFKC").toLowerCase().replace(/[\s・·\-'’.:,，。「」()（）"“”]/g, "")].map((ch) => KANJI_MAP.get(ch) || ch).join("");
+function lcsLen(a, b) {
+  const d = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = 0;
+    for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = a[i - 1] === b[j - 1] ? prev + 1 : Math.max(d[j], d[j - 1]); prev = t; }
+  }
+  return d[b.length];
+}
+// 卡名和读到的文字有多像：在文字里找最像的一小段（允许错漏一两个字），避免长串杂讯碰巧凑出匹配
+function nameScore(name, text) {
+  const a = normName(name), b = normName(text);
+  if (a.length < 2 || !b.length) return 0;
+  if (b.includes(a)) return 1;
+  if (a.length <= 2) return 0;
+  const win = a.length + 2;
+  let best = 0;
+  for (let i = 0; i + 1 <= Math.max(1, b.length - win + 1); i++) best = Math.max(best, lcsLen(a, b.slice(i, i + win)) / a.length);
+  return best;
+}
+// 宝可梦各语言名字（用图鉴编号查 PokéAPI），解决数据库里缺繁中资料的系列：「變隱龍」也能对上「カクレオン」
+async function speciesNames(id) {
+  const k = "sp." + id, c = store.get(k, null);
+  if (c) return c;
+  try {
+    const j = await (await fetch(`https://pokeapi.co/api/v2/pokemon-species/${id}`)).json();
+    const out = (j.names || []).filter((n) => ["ja-hrkt", "ja", "zh-hant", "zh-hans", "en"].includes(String(n.language.name).toLowerCase())).map((n) => n.name);
+    store.set(k, out);
+    return out;
+  } catch { return []; }
+}
+const nameCache = new Map();
+function namesFor(c) {
+  const key = c.lang + ":" + c.id;
+  if (!nameCache.has(key)) nameCache.set(key, (async () => {
+    const names = new Set([c.name, c.tpName && String(c.tpName).replace(/\s*-\s*\d+\/\d+.*$/, "")].filter(Boolean));
+    if (!c.tpOnly && c.lang !== "zh-cn") {
+      try {
+        const card = await getCard(c.lang === "zh-tw" ? "ja" : c.lang, c.id);
+        if (card.name) names.add(card.name);
+        for (const id of card.dexId || []) for (const n of await speciesNames(id)) names.add(n);
+      } catch {}
+    }
+    return [...names];
+  })());
+  return nameCache.get(key);
+}
+// 用读到的卡名在候选里挑：最像的要够像（≥0.6），而且比别的卡明显像（领先 0.2）
+async function resolveByName(cands, text) {
+  if (!text || normName(text).replace(/\d/g, "").length < 2) return null;
+  const scored = [];
+  for (const c of cands.slice(0, 20)) {
+    const names = await namesFor(c);
+    scored.push({ c, s: Math.max(0, ...names.map((n) => nameScore(n, text))) });
+  }
+  scored.sort((a, b) => b.s - a.s);
+  const best = scored[0];
+  if (!best || best.s < 0.6) return { pick: null, scores: scored };
+  const sameCard = (x) => String(x.c.setId).toUpperCase() === String(best.c.setId).toUpperCase() && x.c.localId === best.c.localId;
+  const rival = scored.find((x) => !sameCard(x));
+  if (rival && best.s - rival.s < 0.2) return { pick: null, scores: scored };
+  let pick = best.c;
+  // 卡名有假名是日版；全是汉字是繁中
+  const hasKana = /[぀-ヿ]/.test(text), hanzi = (text.match(/[一-鿿]/g) || []).length;
+  if ((pick.lang === "ja" && !hasKana && hanzi >= 2) || (pick.lang === "zh-tw" && hasKana)) {
+    const alt = await counterpart(pick).catch(() => null);
+    if (alt) pick = alt;
+  }
+  return { pick, score: best.s, scores: scored };
+}
+
 // ---------- AI 读卡底：网页自带的识别读不出来时（白字描边、花背景），交给价格服务器上的看图模型 ----------
 let aiDisabled = false; // 服务器没开 AI 时不再反复请求
 async function aiRead(canvas, maxW = 720) {
@@ -1448,7 +1557,7 @@ async function startScan() {
   const recent = [];           // 最近几帧的读数
   let frame = -1, unsure = 0, unsureBest = null, votes = [], voteSig = "", stick = false;
   const startedAt = Date.now(); let lastHit = Date.now();
-  let framesDone = 0, noNumFrames = 0, deepTried = false, aiTries = 0;
+  let framesDone = 0, noNumFrames = 0, deepTried = false, aiTries = 0, nameTries = 0;
   // 请 AI 读卡底（每次扫描最多两次）；认出来了返回 true（扫描结束）
   const tryAi = async () => {
     if (aiTries >= 2 || !proxyUrl() || aiDisabled) return false;
@@ -1503,6 +1612,30 @@ async function startScan() {
         // 卡面特征：按取景框截 + 整个画面粗略滑动找卡（卡没对准框也能比）
         const sigsNow = liveCardSigs().concat(slideSigs($("video"), 0, true));
         const done = async (ir) => { await showPicked(ref.parsed, ir); finishScan(); };
+        // 读卡片顶部的名字来确认（每次扫描最多读 3 次，比较慢）；认出来了返回 true
+        const nameCheck = async (pool) => {
+          if (!pool.length || nameTries >= 3) return false;
+          nameTries++;
+          setStatus(`读到 <code>${esc(sig)}</code>，正在读卡名核对…${nameWorker ? "" : "（第一次要下载中日文字库，请稍等）"}`);
+          const english = pool.every((c) => c.lang === "en");
+          let text = "";
+          try {
+            // 卡没完全对准时卡名会偏上偏下，读三个位置合起来比
+            text = await ocrName(liveNameCrop(), english);
+            text += " " + (await ocrName(liveNameCrop({ dy: -0.02 }), english));
+            if (normName(text).replace(/\d/g, "").length < 4) text += " " + (await ocrName(liveNameCrop({ dy: 0.02, light: true }), english));
+          } catch {}
+          if (my !== loopId) return true;
+          $("ocrPeek").hidden = false; $("ocrPeek").textContent = "卡名读到：" + text.replace(/\s+/g, " ").trim().slice(0, 40);
+          const nr = await resolveByName(pool, text).catch(() => null);
+          if (my !== loopId) return true;
+          if (nr && nr.pick) {
+            await showResults(ref.parsed, true, [nr.pick]);
+            $("status").insertAdjacentHTML("beforeend", " · 卡名比对确认");
+            finishScan(); return true;
+          }
+          return false;
+        };
         // 每个结果都用卡图核对：不像多半是编号读错了（059 读成 055 也能对上系列和总数），试形近数字、整个系列比对
         if (confident(ref.cands) && !ref.viaVote) {
           const s = proxyUrl() ? await imageSim(ref.cands[0], sigsNow).catch(() => null) : null;
@@ -1513,6 +1646,10 @@ async function startScan() {
             const ir = await resolveByImage(ref.cands, sigsNow).catch(() => null);
             if (my !== loopId) return;
             if (ir && ir.pick) return done(ir);
+            // 卡图帮不上忙：读卡名，在读到的卡和形近编号的卡里挑名字对得上的
+            const pool = ir && ir.scores && ir.scores.length ? ir.scores.map((x) => x.c) : await withLookalikes(ref.cands).catch(() => ref.cands);
+            if (my !== loopId) return;
+            if (await nameCheck(pool)) return;
             // 系列代码 + 编号都读到了（证据强）：实拍卡套反光，相似度本来就偏低。
             // 只要形近编号里没有明显更像的卡，就采用读到的这张，不再「继续扫描」
             if (!weakEvidence(ref.cands[0]) && s !== null && !clearlyBetter(ir, ref.cands[0], s)) {
@@ -1560,6 +1697,7 @@ async function startScan() {
         // 还是拿不准：先请 AI 读卡底，再多看几帧（继续投票），最后列出候选让你点
         if (ref.cands.length && !confident(ref.cands)) {
           unsure++;
+          if (await nameCheck(ref.cands)) return; // 先读卡名挑
           if (await tryAi()) return;
           if (unsure < 6) {
             unsureBest = unsureBest || ref;
@@ -1702,6 +1840,17 @@ async function scanFromImage(img, quiet) {
   if (quiet) { passes = passes.slice(0, 4); bands.splice(5); }
   const total = passes.length * bands.length;
   let k = 0, firstParsed = null, unsureBest = null, aiTried = false;
+  // 卡名：照片上半部分读一次就够（卡名在卡的顶部）；日文 / 繁中卡用中日文字库，美版用英文
+  const nameText = {};
+  const photoName = async (pool) => {
+    const english = pool.length && pool.every((c) => c.lang === "en");
+    const key = english ? "en" : "cjk";
+    if (nameText[key] === undefined) {
+      setStatus(`正在读卡名核对…${english || nameWorker ? "" : "（第一次要下载中日文字库，请稍等）"}`);
+      try { nameText[key] = await ocrName(prep(img, 0, 0, w, h * 0.5, { target: 1400 }), english, "6"); } catch { nameText[key] = ""; }
+    }
+    return nameText[key];
+  };
   const votes = [], querySigs = [], slid = new Set(), photoHints = new Set();
   for (const pass of passes) {
     // 第一轮读完还没结果：把照片下半部分交给 AI 读卡底
@@ -1753,6 +1902,10 @@ async function scanFromImage(img, quiet) {
           // 卡图不像：试形近数字，再试整个系列比对，还不行就换个角度再读
           const ir = await resolveByImage(ref.cands, sigs());
           if (ir && ir.pick) return showPicked(ref.parsed, ir);
+          // 读卡名挑（读到的卡 + 形近编号的卡）
+          const pool = ir && ir.scores && ir.scores.length ? ir.scores.map((x) => x.c) : await withLookalikes(ref.cands).catch(() => ref.cands);
+          const nr = await resolveByName(pool, await photoName(pool)).catch(() => null);
+          if (nr && nr.pick) { const r = await showResults(ref.parsed, false, [nr.pick]); $("status").insertAdjacentHTML("beforeend", " · 卡名比对确认"); return r; }
           // 证据强（系列代码 + 编号）且形近编号里没有明显更像的：采用读到的这张
           if (!weakEvidence(ref.cands[0]) && s !== null && !clearlyBetter(ir, ref.cands[0], s)) return showResults(ref.parsed, false, ref.cands);
           const sets = await setsFor(ref.cands, parsed.totalHints);
@@ -1767,6 +1920,9 @@ async function scanFromImage(img, quiet) {
       setStatus(`识别中…（${k}/${total}）· 比对卡图`);
       const ir = await resolveByImage(unsureBest.cands, sigs());
       if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
+      // 读卡名挑
+      const nr = await resolveByName(unsureBest.cands, await photoName(unsureBest.cands)).catch(() => null);
+      if (nr && nr.pick) { const r = await showResults(unsureBest.parsed, false, [nr.pick]); $("status").insertAdjacentHTML("beforeend", " · 卡名比对确认"); return r; }
       // 卡图也分不出（比如复刻和原版几乎一样）：再读也没用，直接列出来让你选
       // （从相机兜底调用时，卡图也都不像就别列了，多半是读到了杂讯）
       if (ir && ir.scores.length >= 2 && (!quiet || ir.sim >= 0.45)) return showResults(unsureBest.parsed, false, await orderByImage(ir.scores.map((x) => x.c), querySigs, unsureBest.parsed.nums));
@@ -2191,7 +2347,7 @@ renderFx();
 loadFx();
 getIndex();          // 预先加载四种语言的系列列表
 refreshAll(false);
-window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank, slideSigs, setImageSearch, setsFor, productSig, tcgSetList, resolveByImage, withLookalikes };
+window.__ptcg = { parseText, identify, priceFor, prep, ocr, ocrWords, readCodeLeftOf, showResults, scanFromImage, sigFrom, simOf, refSig, photoCardSigs, imageRerank, slideSigs, setImageSearch, setsFor, productSig, tcgSetList, resolveByImage, withLookalikes, resolveByName, namesFor, ocrName, nameScore };
 </script>
 </body>
 </html>
