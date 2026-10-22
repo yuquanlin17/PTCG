@@ -1,4 +1,4 @@
-# 在电脑上本地预览：powershell -ExecutionPolicy Bypass -File serve.ps1
+﻿# 在电脑上本地预览：powershell -ExecutionPolicy Bypass -File serve.ps1
 # 然后打开 http://localhost:8765/
 # /tcgp 路径模拟 worker.js 的价格中转，方便本地测试
 $root = $PSScriptRoot
@@ -6,7 +6,7 @@ $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:8765/")
 $listener.Start()
 Write-Host "Serving $root at http://localhost:8765/"
-$types = @{ ".html" = "text/html; charset=utf-8"; ".json" = "application/json; charset=utf-8"; ".js" = "text/javascript"; ".png" = "image/png"; ".jpg" = "image/jpeg" }
+$types = @{ ".html" = "text/html; charset=utf-8"; ".json" = "application/json; charset=utf-8"; ".js" = "text/javascript"; ".png" = "image/png"; ".jpg" = "image/jpeg"; ".jpeg" = "image/jpeg"; ".bin" = "application/octet-stream" }
 function Search-Tcgp($q, $line) {
   $body = @{
     algorithm = "sales_synonym_v2"; from = 0; size = 10
@@ -66,7 +66,15 @@ while ($listener.IsListening) {
   $ctx = $listener.GetContext()
   $path = [Uri]::UnescapeDataString($ctx.Request.Url.AbsolutePath.TrimStart("/"))
   try {
-    if ($path -eq "tcgp") {
+    if ($path -eq "save" -and $ctx.Request.HttpMethod -eq "POST") {
+      # 建卡图库页面把结果存回 tools 文件夹（只接受简单文件名）
+      $name = $ctx.Request.QueryString["name"]
+      if ($name -notmatch '^[\w.\-]+$') { throw "bad name" }
+      $ms = New-Object IO.MemoryStream; $ctx.Request.InputStream.CopyTo($ms)
+      [IO.File]::WriteAllBytes((Join-Path $root "tools\$name"), $ms.ToArray())
+      $bytes = [Text.Encoding]::UTF8.GetBytes("ok")
+      $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+    } elseif ($path -eq "tcgp") {
       $q = $ctx.Request.QueryString["q"]; $line = $(if ($ctx.Request.QueryString["line"] -eq "pokemon-japan") { "pokemon-japan" } else { "pokemon" })
       $set = $ctx.Request.QueryString["set"]
       $hist = $ctx.Request.QueryString["history"]
