@@ -380,7 +380,9 @@ const getCard = (l, id) => getJSON(`${API}/${l}/cards/${encodeURIComponent(id)}`
 let setIdx = null;
 async function getIndex() {
   if (setIdx) return setIdx;
-  const lists = await Promise.all(LANG_KEYS.map((l) => getSets(l).catch(() => null)));
+  // 网络不稳时某个语言的系列列表可能没下载成功：再试一次，不然这一轮就找不到卡
+  const fetchList = (l) => getSets(l).catch(() => sleep(600).then(() => getSets(l)).catch(() => null));
+  const lists = await Promise.all(LANG_KEYS.map(fetchList));
   const idx = {};
   LANG_KEYS.forEach((l, i) => {
     // 简中库里混有繁中数据，只认 C 开头的简中商品编号
@@ -1557,7 +1559,16 @@ async function startScan() {
   const recent = [];           // 最近几帧的读数
   let frame = -1, unsure = 0, unsureBest = null, votes = [], voteSig = "", stick = false;
   const startedAt = Date.now(); let lastHit = Date.now();
-  let framesDone = 0, noNumFrames = 0, deepTried = false, aiTries = 0, nameTries = 0;
+  let framesDone = 0, noNumFrames = 0, deepTried = false, aiTries = 0, nameTries = 0, nameFor = "", namePending = null;
+  // 读卡片顶部的卡名（卡没完全对准时会偏上偏下，读两三个位置合起来）
+  const readNameText = async (english) => {
+    let text = await ocrName(liveNameCrop(), english);
+    text += " " + (await ocrName(liveNameCrop({ dy: -0.02 }), english));
+    if (normName(text).replace(/\d/g, "").length < 4) text += " " + (await ocrName(liveNameCrop({ dy: 0.02, light: true }), english));
+    return text;
+  };
+  // 开始扫描几秒后在后台先把中日文字库下载好，第一次需要读卡名时就不用等
+  setTimeout(() => { if (my === loopId) getNameWorker().catch(() => {}); }, 3000);
   // 请 AI 读卡底（每次扫描最多两次）；认出来了返回 true（扫描结束）
   const tryAi = async () => {
     if (aiTries >= 2 || !proxyUrl() || aiDisabled) return false;
@@ -1612,19 +1623,22 @@ async function startScan() {
         // 卡面特征：按取景框截 + 整个画面粗略滑动找卡（卡没对准框也能比）
         const sigsNow = liveCardSigs().concat(slideSigs($("video"), 0, true));
         const done = async (ir) => { await showPicked(ref.parsed, ir); finishScan(); };
-        // 读卡片顶部的名字来确认（每次扫描最多读 3 次，比较慢）；认出来了返回 true
+        // 读到编号的这一刻就在后台开始读卡名，和下面的卡图比对同时进行（两个识别引擎可以并行）；
+        // 卡图能确认就用不上，丢掉即可；卡图对不上时卡名多半已经读好了
+        if (ref.cands.length && nameFor !== sig && nameTries < 3) {
+          nameFor = sig; nameTries++;
+          namePending = readNameText(ref.cands.every((c) => c.lang === "en")).catch(() => "");
+        }
+        // 用读到的卡名来确认；认出来了返回 true
         const nameCheck = async (pool) => {
-          if (!pool.length || nameTries >= 3) return false;
-          nameTries++;
+          if (!pool.length) return false;
+          if (nameFor !== sig) {
+            if (nameTries >= 3) return false;
+            nameFor = sig; nameTries++;
+            namePending = readNameText(pool.every((c) => c.lang === "en")).catch(() => "");
+          }
           setStatus(`读到 <code>${esc(sig)}</code>，正在读卡名核对…${nameWorker ? "" : "（第一次要下载中日文字库，请稍等）"}`);
-          const english = pool.every((c) => c.lang === "en");
-          let text = "";
-          try {
-            // 卡没完全对准时卡名会偏上偏下，读三个位置合起来比
-            text = await ocrName(liveNameCrop(), english);
-            text += " " + (await ocrName(liveNameCrop({ dy: -0.02 }), english));
-            if (normName(text).replace(/\d/g, "").length < 4) text += " " + (await ocrName(liveNameCrop({ dy: 0.02, light: true }), english));
-          } catch {}
+          const text = await namePending;
           if (my !== loopId) return true;
           $("ocrPeek").hidden = false; $("ocrPeek").textContent = "卡名读到：" + text.replace(/\s+/g, " ").trim().slice(0, 40);
           const nr = await resolveByName(pool, text).catch(() => null);
