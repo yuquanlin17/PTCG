@@ -466,7 +466,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.23d · 简中151按卡名找";
+const APP_VERSION = "10.23e · 改版本不误收藏";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
@@ -1498,6 +1498,7 @@ function mountCard(c, choosable, parent, replace) {
   const el = renderCard(c, choosable);
   if (replace) replace.replaceWith(el); else parent.appendChild(el);
   priceFor(c).then((p) => {
+    if (c._replaced) return; // 价格回来之前已经改成别的版本了（其实是繁中 / 简中）：这张作废，不再自动收藏
     c.price = p && p.usd != null ? p : null;
     if (p && p.tpId && !c.tpId) { c.tpId = p.tpId; el.querySelector(":scope > img, :scope > .ph").replaceWith(cardImg(c)); }
     updatePrice(el, c, c.price);
@@ -1546,6 +1547,7 @@ async function offerSwitch(c, el) {
   const b = document.createElement("button"); b.className = "btn small";
   b.textContent = `其实是${LANGS[alt.lang]}卡`;
   b.onclick = () => {
+    c._replaced = true;
     if (c._autoKey) { lib = lib.filter((x) => x.key !== c._autoKey); saveLib(); }
     removeFromTray(c);
     mountCard(alt, false, null, el);
@@ -1585,6 +1587,7 @@ function removeFromTray(c) { if (!inSession.has(c)) return; inSession.delete(c);
 $("trayClear").onclick = () => { session = []; renderTray(); };
 
 function autoSave(c, el) {
+  if (c._replaced) return;
   if (c.price === undefined) { c._wantSave = true; return; } // 价格还没回来
   addToTray(c);
   const act = el.querySelector("[data-act]");
@@ -2145,6 +2148,7 @@ async function cands151C(c) {
   return out;
 }
 async function switchTo151C(x) {
+  x._replaced = true;
   if (x._autoKey) { lib = lib.filter((y) => y.key !== x._autoKey); saveLib(); }
   removeFromTray(x);
   setStatus("在简中 151 里找同名的卡…");
