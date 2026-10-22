@@ -84,7 +84,7 @@ header.top h1 { font-size: 19px; margin: 0; letter-spacing: .02em; white-space: 
 .btn:disabled { opacity: .5; }
 .btn.small { padding: 6px 10px; font-size: 13px; border-radius: 9px; }
 
-.manual { display: flex; gap: 8px; margin-top: 4px; }
+.manual { display: flex; gap: 8px; margin-top: 10px; }
 .manual input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 11px 12px; }
 
 .status { margin-top: 12px; font-size: 13px; color: var(--muted); min-height: 1.4em; scroll-margin-top: 12px; }
@@ -165,17 +165,15 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
     </div>
 
     <button class="scanbtn" id="scanBtn">开始扫描</button>
+    <form class="manual" id="manualForm">
+      <input id="manualIn" type="search" enterkeyhint="search" placeholder="或者直接输入：M3 110 / SV5a 59 / PAF 232" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="输入系列代码和编号查询">
+      <button class="btn" type="submit">查询</button>
+    </form>
     <div class="linkrow">
       <label class="linkbtn" for="pickIn">从相册选图</label>
-      <button class="linkbtn" id="manualToggle" aria-expanded="false" aria-controls="manualForm">手动输入</button>
     </div>
     <input type="file" id="shootIn" accept="image/*" capture="environment" hidden>
     <input type="file" id="pickIn" accept="image/*" hidden>
-
-    <form class="manual" id="manualForm" hidden>
-      <input id="manualIn" placeholder="例：SV8a 236 / PAF 232 / CSV8C 100" autocomplete="off" aria-label="手动输入系列代码和编号">
-      <button class="btn" type="submit">查询</button>
-    </form>
 
     <div class="status" id="status"></div>
     <div class="peek" id="ocrPeek" hidden></div>
@@ -210,7 +208,7 @@ nav.bottom button[aria-current="page"]::before { content: ""; display: block; wi
       <span>USD 的卡扫描后自动加入收藏</span>
     </div>
     <div class="settings" id="fxLine"></div>
-    <form class="settings" id="proxyForm">
+    <form class="settings" id="proxyForm" hidden>
       <label for="proxyIn">价格服务器</label>
       <input id="proxyIn" type="url" placeholder="https://xxx.workers.dev" style="flex:1;min-width:180px;width:auto" autocomplete="off">
       <button class="btn small" type="submit">保存</button>
@@ -334,11 +332,13 @@ async function getIndex() {
 
 // ---------- 价格：TCGplayer 市价（美元） ----------
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
+// 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
+const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
   const s = store.get("ptcg.proxy", "");
   if (s) return s.replace(/\/+$/, "");
   if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return location.origin + "/tcgp";
-  return "";
+  return BUILTIN_PROXY.replace(/\/+$/, "");
 }
 async function tcgSearch(q, line) {
   const base = proxyUrl();
@@ -462,6 +462,7 @@ function prep(src, sx, sy, sw, sh, opt = {}) {
   const target = opt.target || 1400, angle = ((opt.angle || 0) * Math.PI) / 180;
   const scale = Math.max(0.4, Math.min(3, target / sw));
   const W = Math.round(sw * scale), H = Math.round(sh * scale);
+  if (!(W > 0 && H > 0 && W < 8000 && H < 8000)) { window.__badPrep = { sx, sy, sw, sh, target, W, H }; return null; } // 画面还没准备好
   const c = document.createElement("canvas"); c.width = W; c.height = H;
   const g = c.getContext("2d", { willReadFrequently: true });
   g.fillStyle = "#808080"; g.fillRect(0, 0, W, H);
@@ -478,6 +479,8 @@ function prep(src, sx, sy, sw, sh, opt = {}) {
   for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > n * 0.01) { hi = v; break; } }
   const span = Math.max(1, hi - lo);
   for (let j = 0; j < n; j++) lum[j] = ((lum[j] - lo) * 255) / span;
+  // light=true：反色。全图卡的编号、黑框里的系列代码都是白字，反过来才是识别引擎认得的黑字
+  if (opt.light) for (let j = 0; j < n; j++) lum[j] = 255 - lum[j];
   if (opt.adaptive) {
     // 积分图求局部均值，比均值暗一截的算文字
     const ii = new Float64Array((W + 1) * (H + 1));
@@ -611,10 +614,10 @@ function slideSigs(img, angleDeg = 0) {
 }
 
 // 候选卡按图片相似度重新排；第一名明显领先才采用
-async function imageRerank(cands, querySigs) {
+async function imageRerank(cands, querySigs, limit = 8) {
   if (cands.length < 2 || !querySigs.length) return null;
   const scored = [];
-  for (const c of cands.slice(0, 8)) {
+  for (const c of cands.slice(0, limit)) {
     const ref = await refSig(c);
     if (ref) scored.push({ c, s: Math.max(...querySigs.map((q) => simOf(q, ref))) });
   }
@@ -622,9 +625,38 @@ async function imageRerank(cands, querySigs) {
   // 日版和繁中同一张卡用的是同一张图，算一组；和「别的卡」比领先多少
   const same = (x) => x.c.lang !== "en" && scored[0].c.lang !== "en" && String(x.c.setId).toUpperCase() === String(scored[0].c.setId).toUpperCase() && x.c.localId === scored[0].c.localId;
   const rival = scored.find((x) => !same(x));
-  const ok = scored.length >= 2 && scored[0].s >= 0.3 && (!rival || scored[0].s - rival.s >= 0.06);
+  // 要够像（≥70%）且明显领先才自动采用；都不太像时宁可再看
+  const ok = scored.length >= 2 && scored[0].s >= 0.7 && (!rival || scored[0].s - rival.s >= 0.06);
   const pick = ok ? (scored.filter(same).find((x) => x.c.lang === "ja") || scored[0]).c : null;
   return { pick, sim: scored[0] ? scored[0].s : 0, scores: scored };
+}
+
+// 候选卡都和卡图对不上：编号多半读错了，把同系列里形近数字的卡也加进来（076 → 078、070…）
+async function withLookalikes(cands) {
+  const idx = await getIndex(), out = cands.slice();
+  for (const c of cands.slice(0, 2)) {
+    if (c.tpOnly || c.manual || !c.setId) continue;
+    const U = String(c.setId).toUpperCase(), set = idx[c.lang].map.get(U) || idx.ja.map.get(U);
+    if (!set) continue;
+    for (const alt of lookalikeNums(parseInt(c.localId, 10))) {
+      const a = await candidate(c.lang, set, { n: alt, total: c.official });
+      if (a && !out.some((x) => x.lang === a.lang && x.id === a.id)) { a.score = (c.score || 2) - 0.5; out.push(a); }
+    }
+  }
+  return out;
+}
+// 用卡图在候选里挑；挑不出且都不像时，加上形近数字的卡再挑一次
+async function resolveByImage(cands, sigs) {
+  let ir = await imageRerank(cands, sigs);
+  if (ir && ir.pick) return ir;
+  if (!ir || ir.sim < 0.7) {
+    const ext = await withLookalikes(cands);
+    if (ext.length > cands.length) {
+      const ir2 = await imageRerank(ext, sigs, 20);
+      if (ir2 && (ir2.pick || !ir || ir2.sim > ir.sim)) ir = ir2;
+    }
+  }
+  return ir;
 }
 
 async function ocr(canvas) {
@@ -653,22 +685,38 @@ async function readCodeLeftOf(canvas, words) {
   const g = c.getContext("2d", { willReadFrequently: true });
   g.imageSmoothingQuality = "high";
   g.drawImage(canvas, cx0, cy0, cx1 - cx0, cy1 - cy0, 0, 0, W, H);
-  const d = g.getImageData(0, 0, W, H), p = d.data;
-  let sum = 0; for (let i = 0; i < p.length; i += 4) sum += p[i];
-  const thr = (sum / (W * H)) * 0.8;
-  const dark = new Uint8Array(W * H);
-  for (let j = 0; j < W * H; j++) dark[j] = p[j * 4] < thr ? 1 : 0;
-  // 去框线：横向黑色连续长度超过字高 2 倍、纵向超过字高 1.3 倍的，都当成线抹掉
-  const th = h * S, kill = new Uint8Array(W * H);
-  for (let y = 0; y < H; y++) { let run = 0; for (let x = 0; x <= W; x++) { if (x < W && dark[y * W + x]) run++; else { if (run > th * 2) for (let k = x - run; k < x; k++) kill[y * W + k] = 1; run = 0; } } }
-  for (let x = 0; x < W; x++) { let run = 0; for (let y = 0; y <= H; y++) { if (y < H && dark[y * W + x]) run++; else { if (run > th * 1.3) for (let k = y - run; k < y; k++) kill[k * W + x] = 1; run = 0; } } }
-  for (let j = 0; j < W * H; j++) { const v = dark[j] && !kill[j] ? 0 : 255; p[j * 4] = p[j * 4 + 1] = p[j * 4 + 2] = v; }
-  g.putImageData(d, 0, 0);
-  const w = await getWorker();
+  const src = g.getImageData(0, 0, W, H), sp = src.data, n = W * H;
+  const gray = new Float32Array(n);
+  for (let j = 0; j < n; j++) gray[j] = sp[j * 4];
+  // 局部均值（积分图）：比周围暗一截的是黑字，比周围亮一截的是白字（黑框里的代码就是白字）
+  const ii = new Float64Array((W + 1) * (H + 1));
+  for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { row += gray[y * W + x]; ii[(y + 1) * (W + 1) + x + 1] = ii[y * (W + 1) + x + 1] + row; } }
+  const r = Math.max(6, Math.round(h * S * 0.8)), mean = new Float32Array(n);
+  for (let y = 0; y < H; y++) {
+    const y0_ = Math.max(0, y - r), y1_ = Math.min(H, y + r + 1);
+    for (let x = 0; x < W; x++) {
+      const x0_ = Math.max(0, x - r), x1_ = Math.min(W, x + r + 1);
+      mean[y * W + x] = (ii[y1_ * (W + 1) + x1_] - ii[y0_ * (W + 1) + x1_] - ii[y1_ * (W + 1) + x0_] + ii[y0_ * (W + 1) + x0_]) / ((x1_ - x0_) * (y1_ - y0_));
+    }
+  }
+  const th = h * S, w = await getWorker(), tokens = [];
   await w.setParameters({ tessedit_pageseg_mode: "7" });
-  let text = "";
-  try { text = (await w.recognize(c)).data.text || ""; } finally { await w.setParameters({ tessedit_pageseg_mode: "11" }); }
-  return text.toUpperCase().split(/[\s\/]+/).map((s) => s.replace(/[^A-Z0-9.\-]/g, "")).filter((s) => s.length >= 2);
+  try {
+    for (const light of [false, true]) {
+      const ink = new Uint8Array(n);
+      for (let j = 0; j < n; j++) ink[j] = light ? (gray[j] > mean[j] + 18 ? 1 : 0) : (gray[j] < mean[j] - 18 ? 1 : 0);
+      // 去框线：横向连续长度超过字高 2 倍、纵向超过字高 1.3 倍的，都当成线抹掉
+      const kill = new Uint8Array(n);
+      for (let y = 0; y < H; y++) { let run = 0; for (let x = 0; x <= W; x++) { if (x < W && ink[y * W + x]) run++; else { if (run > th * 2) for (let k = x - run; k < x; k++) kill[y * W + k] = 1; run = 0; } } }
+      for (let x = 0; x < W; x++) { let run = 0; for (let y = 0; y <= H; y++) { if (y < H && ink[y * W + x]) run++; else { if (run > th * 1.3) for (let k = y - run; k < y; k++) kill[k * W + x] = 1; run = 0; } } }
+      const out = g.createImageData(W, H), op = out.data;
+      for (let j = 0; j < n; j++) { const v = ink[j] && !kill[j] ? 0 : 255; op[j * 4] = op[j * 4 + 1] = op[j * 4 + 2] = v; op[j * 4 + 3] = 255; }
+      g.putImageData(out, 0, 0);
+      const text = (await w.recognize(c)).data.text || "";
+      tokens.push(...text.toUpperCase().split(/[\s\/]+/).map((s) => s.replace(/[^A-Z0-9.\-]/g, "")).filter((s) => s.length >= 2));
+    }
+  } finally { await w.setParameters({ tessedit_pageseg_mode: "11" }); }
+  return [...new Set(tokens)];
 }
 
 // 按字形算的编辑距离：1/I/L/T、0/O/D、5/S 这类容易认错的字只算「半个错」
@@ -807,6 +855,8 @@ async function identify(parsed) {
   // TCGplayer 按卡面印的编号记录，复刻卡也查得到。复刻卡连版权年份都照抄原版，只能靠卡图（边框颜色等）区分
   let tpCands = [];
   if (!hits.length && proxyUrl() && totals.length) tpCands = await tcgNumberCandidates(parsed);
+  // 卡面完全没读到系列代码：多半是美版老卡或复刻卡（现在的日版卡都印代码），美版候选排前面
+  if (!codeTokens.some((s) => /\d/.test(s))) tpCands.forEach((c) => (c.score = 2.3));
   // 再按「编号/总数」在 TCGdex 各语言里找（美版已经由 TCGplayer 找过就跳过），两边候选合在一起
   if (!hits.length) {
     const hasCode = codeTokens.some((s) => /\d/.test(s));
@@ -821,11 +871,21 @@ async function identify(parsed) {
   for (const h of hits.slice(0, 12)) {
     for (const num of parsed.nums) {
       if (num.promo && String(h.set.id).toUpperCase() !== num.promo) continue;
-      const c = await candidate(h.lang, h.set, num);
-      if (!c) continue;
       const off = h.set.cardCount && h.set.cardCount.official;
-      c.score = h.score + (num.total && off ? (off === num.total ? 1 : -1) : 0);
-      if (!out.some((x) => x.lang === c.lang && x.id === c.id)) out.push(c);
+      const bonus = num.total && off ? (off === num.total ? 1 : -1) : 0;
+      const c = await candidate(h.lang, h.set, num);
+      if (c) {
+        c.score = h.score + bonus;
+        if (!out.some((x) => x.lang === c.lang && x.id === c.id)) out.push(c);
+        continue;
+      }
+      // 系列对上了但没有这个编号：多半是斜体数字认错（1↔7、0↔8…），试一下形近数字，交给卡图挑
+      if (h.score >= 2) {
+        for (const alt of lookalikeNums(num.n)) {
+          const c2 = await candidate(h.lang, h.set, { ...num, n: alt });
+          if (c2 && !out.some((x) => x.lang === c2.lang && x.id === c2.id)) { c2.score = h.score + bonus - 0.5; out.push(c2); }
+        }
+      }
     }
   }
   out.push(...tpCands);
@@ -833,6 +893,15 @@ async function identify(parsed) {
   if (!out.length) return out;
   const top = out[0].score;
   return top >= 3 ? out.filter((c) => c.score === top) : out.slice(0, 10);
+}
+
+// 斜体数字容易认错的几对：换掉其中一位
+const DIGIT_LOOKALIKE = { 1: "7", 7: "1", 0: "86", 8: "063", 6: "850", 5: "63", 3: "85", 9: "0" };
+function lookalikeNums(n) {
+  const s = String(n).padStart(3, "0"), out = new Set();
+  for (let i = 0; i < s.length; i++) for (const d of DIGIT_LOOKALIKE[s[i]] || "") out.add(parseInt(s.slice(0, i) + d + s.slice(i + 1), 10));
+  out.delete(n);
+  return [...out].filter((x) => x > 0);
 }
 
 // 用 TCGplayer 按印刷编号找美版卡（老卡、复刻卡卡面没有系列代码）
@@ -1073,10 +1142,17 @@ function setScanUI(state) {
   $("guide").classList.toggle("scanning", state === "scanning");
 }
 
-// 每一帧换一种角度 / 处理方式轮流试，卡放歪了或者有反光也能读到
-const FRAME_VARIANTS = [{ angle: 0 }, { angle: -5 }, { angle: 5 }, { angle: 0, adaptive: true }, { angle: -9 }, { angle: 9 }, { angle: -5, adaptive: true }, { angle: 5, adaptive: true }];
+// 每一帧换一种处理方式轮流试：
+//   left = 只截左下角放大（现在的卡编号都在左下），否则截整条（老卡编号在右下）
+//   light = 反色（全图卡的白字编号、黑框里的白字代码）；adaptive = 局部二值化（反光、明暗不均）
+const FRAME_VARIANTS = [
+  { left: true }, { left: true, light: true }, { left: true, adaptive: true }, {},
+  { left: true, light: true, adaptive: true }, { light: true }, { adaptive: true },
+  { left: true, angle: -5 }, { left: true, angle: 5 }, { left: true, light: true, angle: -5 }, { left: true, light: true, angle: 5 },
+  { left: true, adaptive: true, angle: -5 }, { left: true, adaptive: true, angle: 5 }, { angle: -9 }, { angle: 9 },
+];
 
-// 取相机画面里引导框底部那一条（留出上下余量，卡歪一点也框得住）
+// 取相机画面里引导框底部编号那一行（留出上下余量，卡歪一点也框得住）
 function grabStrip(variant) {
   const v = $("video"), vf = $("vf"), g = $("guide");
   const vw = v.videoWidth, vh = v.videoHeight; if (!vw) return null;
@@ -1084,7 +1160,8 @@ function grabStrip(variant) {
   const s = Math.max(box.width / vw, box.height / vh); // object-fit: cover 的换算
   const ox = (vw * s - box.width) / 2, oy = (vh * s - box.height) / 2;
   const gx = (gb.left - box.left + ox) / s, gy = (gb.top - box.top + oy) / s, gw = gb.width / s, gh = gb.height / s;
-  return prep(v, gx - gw * 0.05, gy + gh * 0.74, gw * 1.1, gh * 0.32, variant);
+  if (variant.left) return prep(v, gx - gw * 0.03, gy + gh * 0.875, gw * 0.65, gh * 0.12, { target: 1600, ...variant });
+  return prep(v, gx - gw * 0.05, gy + gh * 0.85, gw * 1.1, gh * 0.17, { target: 1400, ...variant });
 }
 
 async function startScan() {
@@ -1097,9 +1174,13 @@ async function startScan() {
   try { await getWorker(); } catch (e) { setStatus("识别引擎加载失败，请检查网络：" + esc(e.message)); stopScan(); return; }
   setStatus("把卡放进框里，底部编号对准黄色虚线…");
   const recent = [];           // 最近几帧的读数
-  let frame = 0, unsure = 0, unsureBest = null, votes = [], voteSig = "";
+  let frame = -1, unsure = 0, unsureBest = null, votes = [], voteSig = "", stick = false;
+  const startedAt = Date.now(); let lastHit = Date.now();
   while (scanning && my === loopId) {
-    const strip = grabStrip(FRAME_VARIANTS[frame++ % FRAME_VARIANTS.length]);
+    // 上一帧读到了编号，就继续用同一种处理方式，方便连续两次读到同样的结果
+    if (!stick) frame++;
+    let strip = null;
+    try { strip = grabStrip(FRAME_VARIANTS[frame % FRAME_VARIANTS.length]); } catch {}
     if (!strip) { await sleep(200); continue; }
     let parsed, words;
     try { const o = await ocrWords(strip); parsed = parseText(o.text); words = o.words; } catch { await sleep(300); continue; }
@@ -1108,6 +1189,7 @@ async function startScan() {
     $("ocrPeek").hidden = false;
     $("ocrPeek").textContent = "正在读到：" + (parsed.raw.slice(0, 70) || "（什么都没读到）");
     recent.push(parsed); if (recent.length > 5) recent.shift();
+    stick = parsed.nums.length > 0 && !stick; // 最多连用一次，避免卡在读错的方式上
     if (parsed.nums.length) {
       const sig = numsLabel(parsed);
       // 最近几帧里第二次读到同一个编号才算数，避免看错数字；这些帧里的语言标记合并起来用
@@ -1123,24 +1205,35 @@ async function startScan() {
         let ref;
         try { ref = await refineWithCode(strip, words, parsed, votes); } catch { ref = { parsed, cands: [] }; }
         if (my !== loopId) return;
-        // 只靠编号认出来的，卡图对不上就不算（多半是编号读错了）
+        const sigsNow = liveCardSigs();
+        const done = async (ir) => { await showPicked(ref.parsed, ir); finishScan(); };
+        // 只靠编号认出来的：卡图要像，不像多半是编号读错了，试形近数字
         if (confident(ref.cands) && !ref.viaVote && weakEvidence(ref.cands[0])) {
-          const s = await imageSim(ref.cands[0], liveCardSigs()).catch(() => null);
+          const s = await imageSim(ref.cands[0], sigsNow).catch(() => null);
           if (my !== loopId) return;
-          if (s !== null && s < 0.3) { setStatus(`读到 <code>${esc(sig)}</code>，但卡图对不上，继续扫描…`); recent.length = 0; await sleep(80); continue; }
+          // 卡图不像，或者根本没有卡图可核对：不直接采用
+          if (s === null || s < 0.6) {
+            setStatus(`读到 <code>${esc(sig)}</code>，正在核对卡图…`);
+            const ir = await resolveByImage(ref.cands, sigsNow).catch(() => null);
+            if (my !== loopId) return;
+            if (ir && ir.pick) return done(ir);
+            if (++unsure < 6) { setStatus(`读到 <code>${esc(sig)}</code>，还不确定，继续扫描…`); recent.length = 0; await sleep(80); continue; }
+            // 多次都确认不了：列出来让你确认
+          }
         }
         // 投票选出来的，用卡图核对一下
         if (ref.viaVote) {
-          const ir = await imageRerank(ref.all, liveCardSigs()).catch(() => null);
+          const ir = await resolveByImage(ref.all, sigsNow).catch(() => null);
           if (my !== loopId) return;
-          if (ir && ir.pick) { await showPicked(ref.parsed, ir); scanning = false; setScanUI("found"); return; }
+          if (ir && ir.pick) return done(ir);
         }
-        // 文字拿不准时先和候选卡图片比一比
+        // 文字拿不准时和候选卡图片比一比
         if (ref.cands.length && !confident(ref.cands)) {
           setStatus(`读到 <code>${esc(sig)}</code>，正在比对卡图…`);
-          const ir = await imageRerank(ref.cands, liveCardSigs()).catch(() => null);
+          const ir = await resolveByImage(ref.cands, sigsNow).catch(() => null);
           if (my !== loopId) return;
-          if (ir && ir.pick) { await showPicked(ref.parsed, ir); scanning = false; setScanUI("found"); return; }
+          if (ir && ir.pick) return done(ir);
+          if (ir && ir.scores.length > ref.cands.length) ref = { ...ref, cands: ir.scores.map((x) => x.c) }; // 带上形近数字的候选
         }
         // 还是拿不准就多看几帧（继续投票），最后再列出候选让你点
         if (ref.cands.length && !confident(ref.cands) && ++unsure < 6) {
@@ -1154,13 +1247,27 @@ async function startScan() {
         if (my !== loopId) return;
         const r = await showResults(ref.parsed, true, list);
         if (my !== loopId) return;
-        if (r === "found" || r === "manual") { scanning = false; setScanUI("found"); return; }
+        if (r === "found" || r === "manual") { finishScan(); return; }
         setStatus(`读到 <code>${esc(sig)}</code>，数据库里没找到，继续扫描…`);
         recent.length = 0;
       }
     }
-    await sleep(80);
+    // 省电：每帧之间歇一会儿；一直读不到编号就再放慢；太久没结果就自动暂停，免得手机发烫
+    if (parsed.nums.length) lastHit = Date.now();
+    const idle = Date.now() - lastHit;
+    if (Date.now() - startedAt > 45000) {
+      stopScan();
+      setStatus("扫描已自动暂停（省电）。调整一下角度和距离，点「开始扫描」继续；也可以直接在下面输入编号查询。");
+      return;
+    }
+    await sleep(stick ? 60 : idle > 12000 ? 700 : 300);
   }
+}
+// 认出来了：关掉相机，让手机歇一歇；点「扫下一张」再打开
+function finishScan() {
+  scanning = false; loopId++;
+  closeCam(); setScanUI("found");
+  $("ocrPeek").hidden = true;
 }
 function stopScan() { scanning = false; loopId++; closeCam(); setScanUI("idle"); $("ocrPeek").hidden = true; }
 
@@ -1180,7 +1287,9 @@ async function scanFromImage(img) {
   const bands = [];
   for (let y0 = 0.36; y0 <= 0.86; y0 += 0.07) bands.push(y0);
   bands.sort((a, b) => Math.abs(a + 0.09 - 0.8) - Math.abs(b + 0.09 - 0.8)); // 卡底编号通常在照片 70%~90% 高度
-  const passes = [{ angle: 0 }, { angle: -4 }, { angle: 4 }, { angle: -8 }, { angle: 8 }, { angle: 0, adaptive: true }, { angle: -12 }, { angle: 12 }];
+  // 正色 / 反色（白字）/ 局部二值化，再试几个角度
+  const passes = [{ angle: 0 }, { angle: 0, light: true }, { angle: 0, adaptive: true }, { angle: -4 }, { angle: 4 }, { angle: -4, light: true }, { angle: 4, light: true },
+    { angle: 0, light: true, adaptive: true }, { angle: -8 }, { angle: 8 }, { angle: -12 }, { angle: 12 }];
   const total = passes.length * bands.length;
   let k = 0, firstParsed = null, unsureBest = null;
   const votes = [], querySigs = [], slid = new Set();
@@ -1195,32 +1304,41 @@ async function scanFromImage(img) {
       firstParsed = firstParsed || parsed;
       if (firstParsed !== parsed && numsLabel(firstParsed) !== numsLabel(parsed)) continue; // 只和第一次读到的编号一起投票
       const ref = await refineWithCode(canvas, o.words, parsed, votes);
+      // 卡面特征：这次的位置推算 + 整张照片滑窗（滑窗只算一次）；只在需要比对卡图时才算
+      let added = false;
+      const sigs = () => {
+        if (!added) { added = true; querySigs.push(...photoCardSigs(img, canvas, o.words)); }
+        if (!slid.size) { slid.add(1); querySigs.push(...slideSigs(img, Math.round((canvas._map.a * 180) / Math.PI))); }
+        return querySigs;
+      };
       if (confident(ref.cands)) {
         if (ref.viaVote) {
-          const ir = await imageRerank(ref.all, photoCardSigs(img, canvas, o.words));
+          const ir = await resolveByImage(ref.all, sigs());
           if (ir && ir.pick) return showPicked(ref.parsed, ir); // 卡图说了算
         }
         if (weakEvidence(ref.cands[0])) {
-          const s = await imageSim(ref.cands[0], photoCardSigs(img, canvas, o.words).concat(slideSigs(img, Math.round((canvas._map.a * 180) / Math.PI))));
-          if (s !== null && s < 0.3) continue; // 卡图对不上，多半是编号读错了，换个角度再读
+          const s = await imageSim(ref.cands[0], sigs());
+          if (s === null || s < 0.6) {
+            // 卡图不像，多半是编号读错了：试形近数字，还不行就换个角度再读
+            const ir = await resolveByImage(ref.cands, sigs());
+            if (ir && ir.pick) return showPicked(ref.parsed, ir);
+            continue;
+          }
         }
         return showResults(ref.parsed, false, ref.cands);
       }
       if (!ref.cands.length) continue;
       unsureBest = unsureBest || ref;
-      // 文字拿不准：用这次的位置推算卡面，再加上整张照片滑窗，和候选卡图片比一比
-      querySigs.push(...photoCardSigs(img, canvas, o.words));
-      if (!slid.size) { slid.add(1); querySigs.push(...slideSigs(img, Math.round((canvas._map.a * 180) / Math.PI))); }
       setStatus(`识别中…（${k}/${total}）· 比对卡图`);
-      const ir = await imageRerank(unsureBest.cands, querySigs);
+      const ir = await resolveByImage(unsureBest.cands, sigs());
       if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
       // 卡图也分不出（比如复刻和原版几乎一样）：再读也没用，直接列出来让你选
-      if (ir && ir.scores.length >= 2) return showResults(unsureBest.parsed, false, await orderByImage(unsureBest.cands, querySigs));
+      if (ir && ir.scores.length >= 2) return showResults(unsureBest.parsed, false, await orderByImage(ir.scores.map((x) => x.c), querySigs));
     }
     if (unsureBest && k >= bands.length * 6) break; // 试过 ±8° 和反光处理还拿不准，就列出候选
   }
   if (unsureBest) {
-    const ir = await imageRerank(unsureBest.cands, querySigs);
+    const ir = await resolveByImage(unsureBest.cands, querySigs);
     if (ir && ir.pick) return showPicked(unsureBest.parsed, ir);
     return showResults(unsureBest.parsed, false, await orderByImage(unsureBest.cands, querySigs));
   }
@@ -1238,11 +1356,6 @@ function onPhoto(e) {
 $("shootIn").onchange = onPhoto;
 $("pickIn").onchange = onPhoto;
 
-$("manualToggle").onclick = () => {
-  const f = $("manualForm"); f.hidden = !f.hidden;
-  $("manualToggle").setAttribute("aria-expanded", String(!f.hidden));
-  if (!f.hidden) $("manualIn").focus();
-};
 $("manualForm").onsubmit = async (e) => {
   e.preventDefault();
   const s = $("manualIn").value.trim(); if (!s) return;
