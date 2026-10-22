@@ -2093,9 +2093,13 @@ async function loadHistory() {
   if (pts.length < 2 && x.ph && x.ph.length >= 1 && x.price != null) {
     const loc = inRange(x.ph.map(([t, p]) => ({ d: new Date(t).toISOString().slice(0, 10), p, q: 0 })));
     loc.push({ d: new Date().toISOString().slice(0, 10), p: x.price, q: 0 });
-    if (loc.length >= 2) { pts = loc; source = "本机每次刷新记下的价格"; }
+    // 本机记录不到 2 天时画出来只是一条平线，没意义
+    if (loc.length >= 2 && new Date(loc[loc.length - 1].d) - new Date(loc[0].d) >= 2 * DAY) { pts = loc; source = "本机每次刷新记下的价格"; }
   }
-  if (pts.length < 2) { chart.innerHTML = '<div class="msg">这段时间没有足够的价格记录，画不出曲线</div>'; return; }
+  if (pts.length < 2) {
+    chart.innerHTML = `<div class="msg">${LONG_RANGE.has(shRange) ? "长期价格暂时取不到" : "这段时间的价格暂时取不到"}，本机记录也还太少，过几天再来看。<br>可以先看「1月 / 3月 / 1年」。</div>`;
+    return;
+  }
   drawChart(chart, pts);
   const hi = Math.max(...pts.map((p) => p.p)), lo = Math.min(...pts.map((p) => p.p)), vol = pts.reduce((a, p) => a + (p.q || 0), 0);
   $("shHi").textContent = fmt(hi); $("shHi").dataset.usd = hi;
