@@ -14,6 +14,7 @@ export default {
     if (url.hostname === "ptcgprice.com" || url.hostname === "www.ptcgprice.com") return serveSite(request, url, ctx);
     // POST /read：网页自带的识别读不出卡底文字时，交给 Workers AI 的看图模型来读（需要绑定 Workers AI，变量名 AI）
     if (url.pathname === "/read" && request.method === "POST") return readCard(request, env, cors);
+    if (url.pathname === "/caldate" && request.method === "POST") return readCard(request, env, cors, DATE_PROMPT);
     // POST /track {ids}：登记要每天记录价格的卡（收藏里的卡），需要绑定 KV，变量名 KV
     if (url.pathname === "/track" && request.method === "POST") return track(request, env, cors);
     // ?kv=商品id：读 Worker 每天记下的价格
@@ -286,7 +287,10 @@ const READ_PROMPT =
   "If you cannot read the set code clearly, reply with only the number. Do not guess or invent characters. " +
   "Ignore the single regulation letter before the code and the rarity letters after the number. If you cannot read the number, reply NONE.";
 
-async function readCard(request, env, cors) {
+// POST /caldate {image}：从简中商品宣传图里读发售日（GitHub 自动任务用；宣传图上的艺术字一般的文字识别认不出来）
+const DATE_PROMPT = "This is a promotional image for a Pokemon card product in Simplified Chinese. If the image shows a release date " +
+  "(for example 2026年11月6日发售), reply with ONLY that date as YYYY-MM-DD. If there is no release date in the image, reply NONE.";
+async function readCard(request, env, cors, prompt = READ_PROMPT) {
   const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json", ...cors } });
   if (!env.AI) return json({ error: "Workers AI 未绑定（Settings → Bindings → Workers AI，变量名 AI）" }, 501);
   let bytes, b64;
@@ -298,7 +302,7 @@ async function readCard(request, env, cors) {
     bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   } catch { return json({ error: "bad request" }, 400); }
-  try { return json({ text: (await aiAsk(env, bytes, b64, READ_PROMPT, 24, "image/jpeg")).slice(0, 80) }); }
+  try { return json({ text: (await aiAsk(env, bytes, b64, prompt, 24, "image/jpeg")).slice(0, 80) }); }
   catch (e) { return json({ error: "ai failed: " + String(e && e.message || e).slice(0, 200) }, 502); }
 }
 // 问看图模型一个问题。Workers AI 的图片输入格式改过几次：先用现在的写法（图片放在消息里），不行再试旧写法
@@ -453,5 +457,6 @@ async function calEnTcgp(get) {
   return list.filter((p) => String((p.customAttributes || {}).releaseDate || "").slice(0, 10) > today && !/\bCase\b|Half Booster Box|Art Bundle/i.test(p.productName))
     .map((p) => { const id = Math.round(p.productId); return { id: "tp:" + id, src: "tcgp", region: "en", name: p.productName, type: p.setName || "",
       date: String(p.customAttributes.releaseDate).slice(0, 10), img: `https://tcgplayer-cdn.tcgplayer.com/product/${id}_in_1000x1000.jpg`, imgs: [],
-      price: p.marketPrice ? "$" + Number(p.marketPrice).toFixed(2) : "", desc: "", contents: [], link: `https://www.tcgplayer.com/product/${id}`, from: "TCGplayer 预售" }; });
+      // TCGplayer 的是预售市场价（通常有溢价），不是官方建议零售价：单独放在 market，网页上注明
+      price: "", market: p.marketPrice ? "$" + Number(p.marketPrice).toFixed(2) : "", desc: "", contents: [], link: `https://www.tcgplayer.com/product/${id}`, from: "TCGplayer 预售" }; });
 }
