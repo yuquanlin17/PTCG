@@ -49,7 +49,7 @@ async function get(url, headers) {
 async function askDate(jpeg, posted) {
   try {
     const r = await fetch(`${API}/caldate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: jpeg.toString("base64") }) });
-    const m = String((await r.json()).text || "").match(/(20\d\d)-(\d{1,2})-(\d{1,2})/);
+    const m = String((await r.json()).text || "").match(/(20\d\d)\s*[年\-./]\s*(\d{1,2})\s*[月\-./]\s*(\d{1,2})/);
     if (!m) return null;
     const d = `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
     const max = ymd(new Date(Date.parse(posted) + 183 * 864e5));
