@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- 主屏幕图标：深色背景 + 金色扫描框角 + 闪卡（卡面上一条上涨的价格曲线） -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b1f2e"/>
+      <stop offset="1" stop-color="#0c0e15"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.47" r="0.5">
+      <stop offset="0" stop-color="#f0b43a" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#f0b43a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="foil" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe7a3"/>
+      <stop offset="0.35" stop-color="#f0b43a"/>
+      <stop offset="0.65" stop-color="#ffd76a"/>
+      <stop offset="1" stop-color="#c9861a"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a3f6e"/>
+      <stop offset="1" stop-color="#1e2240"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.56" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+
+  <!-- 扫描框角 -->
+  <g fill="none" stroke="#f0b43a" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M196 330 V230 a34 34 0 0 1 34 -34 H330"/>
+    <path d="M694 196 H794 a34 34 0 0 1 34 34 V330"/>
+    <path d="M828 694 V794 a34 34 0 0 1 -34 34 H694"/>
+    <path d="M330 828 H230 a34 34 0 0 1 -34 -34 V694"/>
+  </g>
+
+  <!-- 卡片（微微倾斜） -->
+  <g transform="rotate(-8 512 512)">
+    <rect x="352" y="272" width="320" height="448" rx="30" fill="url(#foil)"/>
+    <rect x="374" y="294" width="276" height="404" rx="18" fill="url(#face)"/>
+    <!-- 卡图区 -->
+    <rect x="396" y="318" width="232" height="168" rx="10" fill="#262b52"/>
+    <path d="M512 352 l14 36 38 2 -30 24 10 37 -32 -21 -32 21 10 -37 -30 -24 38 -2 z" fill="#ffd76a"/>
+    <!-- 价格曲线 -->
+    <polyline points="404,640 452,600 494,618 544,560 598,528 620,540" fill="none" stroke="#5fe39b" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M590 506 L632 512 L612 550 Z" fill="#5fe39b"/>
+    <rect x="404" y="508" width="150" height="16" rx="8" fill="#ffffff" fill-opacity="0.5"/>
+    <rect x="404" y="536" width="96" height="14" rx="7" fill="#ffffff" fill-opacity="0.3"/>
+    <rect x="352" y="272" width="320" height="448" rx="30" fill="url(#shine)"/>
+  </g>
+</svg>
