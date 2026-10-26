@@ -3,6 +3,7 @@
 const TF_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1";
 const MODEL = "Xenova/dinov2-small";
 const DTYPE = "fp16"; // 显卡和 CPU 用同一份 fp16 权重，算出来的特征一致（约 42MB，第一次下载后存在手机里）
+// 注意：transformers.js 的本地模型路径是 models/<MODEL>/onnx/model_fp16.onnx（和 HuggingFace 上的目录结构一样）
 export const CARD_W = 224, CARD_H = 312, CARD_RATIO = CARD_W / CARD_H;
 
 let model = null, loading = null;
@@ -12,6 +13,12 @@ export function loadModel(onProgress) {
   if (!loading) {
     loading = (async () => {
       const T = await import(TF_URL);
+      // 模型文件放在网站自己的 models/ 下面（在中国也能下载）；没有的话才去 HuggingFace（在中国打不开时换国内镜像）
+      const local = new URL("./models/", import.meta.url).href;
+      const hasLocal = await fetch(`${local}${MODEL}/onnx/model_${DTYPE}.onnx`, { method: "HEAD", cache: "no-store" }).then((r) => r.ok).catch(() => false);
+      T.env.allowLocalModels = hasLocal;
+      T.env.localModelPath = local;
+      if (!hasLocal) T.env.remoteHost = await pickHost();
       const gpu = !!(navigator.gpu && (await navigator.gpu.requestAdapter().catch(() => null)));
       const make = (device) => T.pipeline("image-feature-extraction", MODEL, { device, dtype: DTYPE, progress_callback: onProgress });
       let m, device = gpu ? "webgpu" : "wasm";
@@ -21,6 +28,16 @@ export function loadModel(onProgress) {
     })().catch((e) => { loading = null; throw e; });
   }
   return loading;
+}
+
+const HOSTS = ["https://huggingface.co/", "https://hf-mirror.com/"];
+async function pickHost() {
+  for (const h of HOSTS) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 5000);
+    try { const r = await fetch(`${h}${MODEL}/resolve/main/config.json`, { signal: ctl.signal, cache: "no-store" }); if (r.ok) return h; }
+    catch {} finally { clearTimeout(t); }
+  }
+  return HOSTS[0];
 }
 
 // 把图上一块区域（卡片）画成标准大小；区域比例和卡片不一样时取中间
