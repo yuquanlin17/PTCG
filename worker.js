@@ -22,12 +22,13 @@ export default {
     // ?pcs=搜索词：PriceCharting 按名字搜，返回列表（简中 151 按卡名找卡用）
     const pcs = (url.searchParams.get("pcs") || "").trim().slice(0, 120);
     if (pcs) return pcSearch(pcs, ctx, cors);
-    // ?calendar=1：发售日历（美版 / 日版 / 简中即将发售的商品）；?calimg=编号：简中商品图（官网图片链接会过期，存了一份）
-    // ?calupdate=1：马上更新一次日历（平时每天自动更新；距上次不到 1 小时不重复做）
+    // ?calendar=1：发售日历里 Worker 负责的部分（日版官网、TCGplayer 美版预售）
+    // ?calupdate=1：马上更新一次（平时由定时任务每天更新；距上次不到 10 分钟不重复做）
     if (url.searchParams.has("calendar")) return calendarGet(env, cors);
-    const calimg = (url.searchParams.get("calimg") || "").replace(/[^\w-]/g, "").slice(0, 40);
-    if (calimg) return calendarImg(calimg, env, cors);
-    if (url.searchParams.has("calupdate")) { const r = await updateCalendar(env, 3600e3); return jsonResp(r || { skipped: true }, cors); }
+    if (url.searchParams.has("calupdate")) {
+      const r = await updateCalendar(env, 600e3).catch((e) => ({ error: String(e && e.message || e) }));
+      return jsonResp(r || { skipped: true }, cors);
+    }
     const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
     const line = url.searchParams.get("line") === "pokemon-japan" ? "pokemon-japan" : "pokemon";
     // ?set=m6-storm-emeralda：列出整个系列的卡（用来按卡图比对），缓存 1 天
@@ -81,12 +82,14 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil((async () => {
       const cal = env.KV && (await env.KV.get("cal", "json"));
-      if (env.KV && (!cal || Date.now() - cal.at > CAL_STALE)) await updateCalendar(env, CAL_STALE);
+      // 有来源上次失败（官网偶尔临时拦截）：2 小时后再试
+      const age = cal ? Date.now() - cal.at : Infinity, failed = cal && cal.errors && Object.keys(cal.errors).length;
+      if (env.KV && (age > CAL_STALE || (failed && age > 2 * 3600e3))) await updateCalendar(env, 0);
       else await snapshot(env);
     })());
   },
   // 测试用：日历的解析函数（Cloudflare 只认 fetch / scheduled，多出来的属性不影响）
-  _cal: { parseEnProduct, parseEnGallery, parseJaApi, parseCnList, parseCnArticle, mergeCalendar },
+  _cal: { parseJaApi, mergeCalendar },
 };
 
 // ---------- 浏览器一样的请求头（不然容易被当成机器人） ----------
@@ -334,13 +337,11 @@ async function listSet(set, line, ctx, cors) {
   return resp;
 }
 
-// ---------- 发售日历：美版 / 日版 / 简中即将发售的商品（每天更新一次，存在 KV 的 cal 里） ----------
-// 来源：美版官网商品图库（每件商品页写着 Launch: 日期，礼盒 / 卡组 / UPC 最准）、TCGplayer 预售（新系列的盒装最早出现在这里）、
-//       日版官网商品接口、简中官网商品资讯（发售日写在宣传图上，用看图模型读出来）
-// 官网有反爬虫，所以一天只查一次；抓过的商品记在 calseen 里不再重抓（免费版每次最多 50 个外部请求）
+// ---------- 发售日历里 Worker 负责的部分（每天更新一次，存在 KV 的 cal 里） ----------
+// 来源：日版官网商品接口、TCGplayer 预售（美版新系列的盒装最早出现在这里）
+// 另外两部分在网站上：简中 cal-cn.json（GitHub 自动任务每天更新）、美版周边 cal-en.json（手动整理）；网页把三份合起来显示
 const CAL_STALE = 30 * 3600e3;
 const CAL_KEEP_DAYS = 7; // 已发售的商品留 7 天
-const EN_GALLERY = "https://www.pokemon.com/us/pokemon-tcg/product-gallery";
 const decodeHtml = (s) => String(s || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&rsquo;|&lsquo;/g, "'")
   .replace(/&ldquo;|&rdquo;/g, '"').replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").replace(/&eacute;/g, "é").replace(/&hellip;/g, "…").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
   .replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n)).replace(/\s+/g, " ").trim();
@@ -350,11 +351,6 @@ async function calendarGet(env, cors) {
   if (!env.KV) return jsonResp({ at: 0, items: [], errors: { kv: "KV 未绑定" } }, cors);
   return jsonResp((await env.KV.get("cal", "json")) || { at: 0, items: [] }, cors, 200, 1800);
 }
-async function calendarImg(key, env, cors) {
-  const v = env.KV && (await env.KV.getWithMetadata("calimg:" + key, "arrayBuffer"));
-  if (!v || !v.value) return new Response("not found", { status: 404, headers: cors });
-  return new Response(v.value, { headers: { "content-type": (v.metadata && v.metadata.type) || "image/jpeg", "cache-control": "public, max-age=604800", ...cors } });
-}
 
 async function updateCalendar(env, minAge) {
   if (!env.KV) return { error: "KV 未绑定" };
@@ -363,20 +359,24 @@ async function updateCalendar(env, minAge) {
   const seen = (await env.KV.get("calseen", "json")) || {};
   let budget = 44;
   const get = (url, opt) => { if (budget-- <= 0) throw new Error("本次请求次数用完"); return fetch(url, opt); };
-  const errors = {}, groups = {};
-  for (const [k, fn] of [["ja", calJa], ["en", calEnOfficial], ["tcgp", calEnTcgp], ["cn", calCn]]) {
-    try { groups[k] = await fn(get, seen, env); } catch (e) { errors[k] = String((e && e.message) || e).slice(0, 120); groups[k] = null; }
+  const errors = {}, groups = {}, partial = {}; // partial：这次读到了一部分（照样用），剩下的稍后补读
+  // 简中不在这里做：官网图片在 Cloudflare 上下载不了（522 / 525），改由 GitHub 自动任务做（tools/calendar.mjs → cal-cn.json）
+  // 美版官网有反爬虫验证（明确不希望程序抓取），不自动抓；周边商品手动整理在 cal-en.json 里
+  for (const [k, fn] of [["ja", calJa], ["tcgp", calEnTcgp]]) {
+    try { groups[k] = await fn(get, seen, env, partial); } catch (e) { errors[k] = String((e && e.message) || e).slice(0, 120); groups[k] = null; }
   }
+  Object.assign(errors, partial);
   // 某个来源这次失败了：沿用上次的结果
   for (const k of Object.keys(groups)) if (!groups[k]) groups[k] = old.items.filter((x) => x.src === k);
+  const counts = Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length]));
   const items = mergeCalendar(groups, ymd(new Date(Date.now() - CAL_KEEP_DAYS * 864e5)));
   // calseen 只留最近半年
   const cut = Date.now() - 180 * 864e5;
   for (const k of Object.keys(seen)) if ((seen[k].at || 0) < cut) delete seen[k];
   await env.KV.put("calseen", JSON.stringify(seen));
-  const cal = { at: Date.now(), items, errors };
+  const cal = { at: Date.now(), items, errors, counts, budgetLeft: budget };
   await env.KV.put("cal", JSON.stringify(cal));
-  return { at: cal.at, count: items.length, errors };
+  return { at: cal.at, count: items.length, counts, budgetLeft: budget, errors };
 }
 // 合并：TCGplayer 预售里和官网重复的去掉；只留 keepFrom 之后（或日期待定）的；按日期排
 function mergeCalendar(groups, keepFrom) {
@@ -411,59 +411,10 @@ function parseJaApi(j) {
   });
 }
 
-// 美版官网商品图库：每件商品页有 Launch: 日期、介绍、内容物清单、图片
-async function calEnOfficial(get, seen) {
-  const r = await get(EN_GALLERY, { headers: PC_HEADERS });
-  const html = await r.text();
-  const slugs = parseEnGallery(html);
-  if (!slugs.length) throw new Error(`美版官网读不到商品列表（HTTP ${r.status}，可能被反爬虫挡了）`);
-  const out = [];
-  let fresh = 0;
-  for (const slug of slugs) {
-    const key = "en:" + slug;
-    // 已经抓过、而且日期已知的不再抓（日期还没公布的过几天再看一次）
-    if (seen[key] && (seen[key].item.date || Date.now() - seen[key].at < 3 * 864e5)) { out.push(seen[key].item); continue; }
-    if (fresh >= 18) continue; // 一次最多抓 18 件新的，剩下的明天
-    fresh++;
-    try {
-      const p = await get(`${EN_GALLERY}/${slug}`, { headers: PC_HEADERS });
-      const item = parseEnProduct(await p.text(), slug);
-      if (item) { seen[key] = { at: Date.now(), item }; out.push(item); }
-    } catch (e) { if (/次数用完/.test(e.message)) break; }
-  }
-  return out;
-}
-function parseEnGallery(html) {
-  const out = [];
-  for (const m of html.matchAll(/href="\/us\/pokemon-tcg\/product-gallery\/([a-z0-9-]+)\/?"/g)) if (!/^\d{4}$/.test(m[1]) && !out.includes(m[1])) out.push(m[1]);
-  return out;
-}
-function parseEnProduct(html, slug) {
-  const h1 = html.match(/<h1[^>]*class="us-title"[^>]*>([\s\S]*?)<\/h1>/);
-  if (!h1) return null;
-  const dm = html.match(/Launch:\s*([A-Za-z]+\s+\d{1,2},\s*\d{4})/);
-  const t = dm ? Date.parse(dm[1] + " UTC") : NaN;
-  const og = (html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/) || [])[1] || "";
-  const i = html.indexOf("full-article-body");
-  const body = i > 0 ? html.slice(i, i + 12000) : "";
-  const end = body.search(/<footer|class="(?:article-footer|related|share)/);
-  const main = end > 0 ? body.slice(0, end) : body;
-  // 介绍：正文段落（不要图片说明那种带 style 的短段落）；「…includes:」后面的列表是内容物
-  const paras = [...main.matchAll(/<p(?![^>]*style)[^>]*>([\s\S]*?)<\/p>/g)].map((m) => decodeHtml(m[1])).filter((s) => s.length > 2);
-  const incIdx = paras.findIndex((s) => /includes?:\s*$/i.test(s));
-  const desc = (incIdx >= 0 ? paras.slice(0, incIdx) : paras).filter((s) => s.length > 30).join("\n");
-  const contents = [...main.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((m) => decodeHtml(m[1])).filter(Boolean).slice(0, 30);
-  const abs = (u) => (/^https?:/.test(u) ? u : "https://www.pokemon.com" + u);
-  const imgs = [...new Set([...main.matchAll(/<img[^>]+src="([^"]+\.(?:png|jpe?g|webp))"/gi)].map((m) => abs(m[1])))].slice(0, 8);
-  return { id: "en:" + slug, src: "en", region: "en", name: decodeHtml(h1[1]).replace(/^Pok[eé]mon TCG:\s*/i, ""), type: "",
-    date: isNaN(t) ? null : ymd(new Date(t)), img: og ? abs(og) : imgs[0] || "", imgs, price: "", desc, contents,
-    link: `${EN_GALLERY}/${slug}`, from: "美版官网" };
-}
-
 // TCGplayer 预售：发售日在今天以后的美版盒装（同一系列的周边商品 TCGplayer 都记成系列首发日，所以只用来补新系列）
 async function calEnTcgp(get) {
   const body = {
-    algorithm: "sales_synonym_v2", from: 0, size: 80,
+    algorithm: "sales_synonym_v2", from: 0, size: 50, // TCGplayer 一次最多 50 条，超过会返回空
     filters: { term: { productLineName: ["pokemon"], productTypeName: ["Sealed Products"] }, range: {}, match: {} },
     listingSearch: { context: { cart: {} }, filters: { term: {}, range: {}, exclude: { channelExclusion: 0 } } },
     context: { cart: {}, shippingCountry: "US" }, settings: { useFuzzySearch: false, didYouMean: {} },
@@ -476,69 +427,4 @@ async function calEnTcgp(get) {
     .map((p) => { const id = Math.round(p.productId); return { id: "tp:" + id, src: "tcgp", region: "en", name: p.productName, type: p.setName || "",
       date: String(p.customAttributes.releaseDate).slice(0, 10), img: `https://tcgplayer-cdn.tcgplayer.com/product/${id}_in_1000x1000.jpg`, imgs: [],
       price: p.marketPrice ? "$" + Number(p.marketPrice).toFixed(2) : "", desc: "", contents: [], link: `https://www.tcgplayer.com/product/${id}`, from: "TCGplayer 预售" }; });
-}
-
-// 简中官网商品资讯：标题「…即将发售」，发售日写在宣传图上 → 看图模型读日期；图片链接会过期，存一份到 KV
-const CN_HEADERS = { ...PC_HEADERS, "accept-language": "zh-CN,zh;q=0.9" };
-async function calCn(get, seen, env) {
-  const html = await (await get("https://www.pokemon.cn/tcg/product/", { headers: CN_HEADERS })).text();
-  const list = parseCnList(html);
-  if (!list.length) throw new Error("简中官网读不到商品资讯列表");
-  const recent = ymd(new Date(Date.now() - 120 * 864e5));
-  const out = [];
-  let fresh = 0;
-  for (const e of list) {
-    if (e.posted < recent) continue;
-    const key = "cn:" + e.id;
-    if (seen[key]) { out.push(seen[key].item); continue; }
-    if (fresh >= 4) continue; // 一次最多读 4 篇新的（每篇要下载图片、问 AI）
-    fresh++;
-    const item = { id: key, src: "cn", region: "zh-cn", name: e.title, type: "", date: null, img: "", imgs: [], price: "", desc: "", contents: [],
-      link: `https://www.pokemon.cn/tcg/product/${e.id}.html`, from: "简中官网", posted: e.posted };
-    try {
-      const art = parseCnArticle(await (await get(item.link, { headers: CN_HEADERS })).text());
-      const pics = [e.thumb, ...art.imgs].filter(Boolean).slice(0, 3);
-      for (let k = 0; k < pics.length; k++) {
-        const ir = await get(pics[k], { headers: { ...CN_HEADERS, accept: "image/*" } });
-        if (!ir.ok) continue;
-        const type = (ir.headers.get("content-type") || "image/jpeg").split(";")[0];
-        const bytes = new Uint8Array(await ir.arrayBuffer());
-        if (bytes.length > 5e6) continue;
-        await env.KV.put(`calimg:cn${e.id}-${k}`, bytes, { metadata: { type }, expirationTtl: 200 * 864e5 });
-        (k === 0 ? (item.img = `?calimg=cn${e.id}-0`) : item.imgs.push(`?calimg=cn${e.id}-${k}`));
-        // 读发售日（每篇最多问两张图）
-        if (!item.date && env.AI && k < 2 && bytes.length < 1.5e6) {
-          let bin = ""; for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode(...bytes.subarray(i, i + 32768));
-          try {
-            const a = await aiAsk(env, bytes, btoa(bin), "This is a promotional image for a Pokemon card product in Simplified Chinese. " +
-              "Find the release date (发售日期 / 发售时间 / 上市时间). Reply with ONLY the date as YYYY-MM-DD. If there is no release date in the image, reply NONE.", 16, type);
-            const m = a.match(/(20\d\d)[-./年]\s*(\d{1,2})[-./月]\s*(\d{1,2})/);
-            if (m) item.date = `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
-          } catch {}
-        }
-      }
-    } catch (err) { if (/次数用完/.test(err.message)) break; }
-    // 读不出日期的也留着（显示「日期待定」），过几天再读一次
-    seen[key] = { at: item.date ? Date.now() : Date.now() - 177 * 864e5, item };
-    out.push(item);
-  }
-  return out;
-}
-function parseCnList(html) {
-  const out = [];
-  for (const m of html.matchAll(/<li class="card__element[^"]*card__category--product[^"]*">([\s\S]*?)<\/li>/g)) {
-    const b = m[1];
-    const id = (b.match(/\/tcg\/product\/(\d+)\.html/) || [])[1];
-    if (!id) continue;
-    out.push({ id, title: decodeHtml(((b.match(/card__products-title">([\s\S]*?)<\/div>/) || [])[1] || "").replace(/<\/?br\s*\/?>/gi, " ")),
-      posted: (b.match(/card__footer--date">([\d-]+)</) || [])[1] || "", thumb: ((b.match(/<img[^>]+src="([^"]+)"/) || [])[1] || "").replace(/&amp;/g, "&") });
-  }
-  return out;
-}
-function parseCnArticle(html) {
-  const i = html.indexOf("article-detail");
-  const body = i > 0 ? html.slice(i) : html;
-  const stop = body.search(/最新资讯|related|card-list/);
-  const main = stop > 0 ? body.slice(0, stop) : body;
-  return { imgs: [...new Set([...main.matchAll(/<img[^>]+src="(https:\/\/image\.pokemon\.com\.cn\/wp-content\/uploads\/[^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, "&")))] };
 }
