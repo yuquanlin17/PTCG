@@ -82,6 +82,42 @@ async function askDate(jpeg, posted) {
   } catch { return null; }
 }
 
+// ---------- 美版建议零售价 → cal-msrp.json ----------
+// Pokémon 官方不公布美版建议零售价；The Lab TCG 每个系列有一页（thelabtcg.com/launch/系列名），逐件列出经销商标价，
+// 商品名和 TCGplayer 的一样（不带系列名）。日历里有哪些美版系列就读哪几页（robots.txt 允许）
+const LAB_UA = "Mozilla/5.0 (compatible; ptcgprice-calendar/1.0; +https://ptcgprice.com)";
+function parseLab(html) {
+  const out = {};
+  for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)) {
+    const cells = [...tr[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map((c) => c[1]);
+    if (cells.length < 2) continue;
+    const name = decodeHtml(cells[0].split(/<\/?(?:span|small|div|br)[^>]*>/)[0] || cells[0]) || decodeHtml(cells[0]);
+    const m = decodeHtml(cells[1]).match(/\$([\d,]+\.\d\d)/);
+    if (!m || !name || /^product$/i.test(name)) continue;
+    out[name.toLowerCase()] = +m[1].replace(/,/g, "");
+  }
+  return out;
+}
+async function updateMsrp() {
+  const old = readJson("cal-msrp.json"), sets = { ...(old.sets || {}) };
+  const titles = new Set();
+  try { for (const x of (await (await fetch(`${API}/?calendar=1`)).json()).items || []) if (x.src === "tcgp" && x.type) titles.add(x.type.split(":").pop().trim()); } catch {}
+  for (const x of readJson("cal-en.json").items) if (x.set) titles.add(x.set);
+  for (const t of titles) {
+    const slug = t.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const url = `https://thelabtcg.com/launch/${slug}`;
+    try {
+      const r = await fetch(url, { headers: { "user-agent": LAB_UA } });
+      const products = r.ok ? parseLab(await r.text()) : {};
+      if (Object.keys(products).length) sets[t.toLowerCase()] = { url, at: ymd(new Date()), products };
+    } catch (e) { console.warn("价格页", url, String(e)); }
+    await sleep(1500);
+  }
+  fs.writeFileSync(new URL("cal-msrp.json", ROOT), JSON.stringify({ at: ymd(new Date()), note: old.note, sets, items: old.items || {} }, null, 1));
+  console.log(`美版建议零售价：${Object.keys(sets).length} 个系列（${Object.keys(sets).join("、")}）`);
+}
+try { await updateMsrp(); } catch (e) { console.warn("建议零售价没更新：", e); }
+
 const old = readJson("cal-cn.json"), known = new Map(old.items.map((x) => [x.id, x]));
 const list = parseCnList(await (await get(CN_LIST, CN_HEADERS)).text());
 if (!list.length) throw new Error("读不到简中商品资讯列表");
