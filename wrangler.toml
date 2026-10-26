@@ -1,0 +1,18 @@
+# Cloudflare Worker 部署配置（价格中转 / AI 读卡底 / 发售日历）
+# 部署：npx.cmd wrangler deploy（要先 npx.cmd wrangler login）
+# 这里的绑定和定时任务和 Cloudflare 网页上原来的设置一致；以后改设置就改这里
+name = "ptcgprice"
+main = "worker.js"
+compatibility_date = "2026-10-21"
+workers_dev = true
+preview_urls = false
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "a8c15a8a4da74222b70cdce52ded1975"
+
+[triggers]
+crons = ["*/30 * * * *"]
