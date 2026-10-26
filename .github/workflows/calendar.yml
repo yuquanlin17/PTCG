@@ -1,0 +1,30 @@
+# 每天更新发售日历的简中部分：简中官网（发售日写在宣传图上，Worker 下载不了图片）→ cal-cn.json
+# 第一次跑时顺便把识别模型（42MB）放进网站，这样在中国也能下载
+name: 更新发售日历
+on:
+  schedule:
+    - cron: "17 9 * * *"   # 每天 UTC 9:17（北京时间 17:17）
+  workflow_dispatch:        # 也可以在 Actions 页面手动跑
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm i --no-save tesseract.js@5.1.1 sharp@0.33.5
+      - run: node tools/calendar.mjs
+      - name: 识别模型
+        run: |
+          f=models/Xenova/dinov2-small/onnx/model_fp16.onnx
+          if [ ! -f "$f" ]; then mkdir -p "$(dirname "$f")" && curl -fL -o "$f" https://huggingface.co/Xenova/dinov2-small/resolve/main/onnx/model_fp16.onnx; fi
+      - name: 有变化就提交
+        run: |
+          git config user.name "calendar-bot"
+          git config user.email "calendar-bot@users.noreply.github.com"
+          git add -A cal-cn.json cal-img models
+          git diff --cached --quiet || (git commit -m "更新发售日历" && git push)
