@@ -221,6 +221,10 @@ nav.bottom { position: fixed; left: 0; right: 0; bottom: 0; background: var(--su
 .cal-desc { margin-top: 12px; font-size: 14px; line-height: 1.6; white-space: pre-line; }
 .cal-contents { margin: 10px 0 14px; padding-left: 20px; font-size: 14px; line-height: 1.6; }
 .cal-contents:empty { display: none; }
+/* 页脚：版权 + 版本号 */
+.site-foot { margin: 28px 2px 8px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.site-foot #footLine { font-weight: 600; }
+.site-foot small { display: block; font-size: 11px; opacity: .8; margin-top: 2px; }
 
 nav.bottom { grid-template-columns: 1fr 1fr 1fr; }
 nav.bottom { backdrop-filter: saturate(1.6) blur(12px); -webkit-backdrop-filter: saturate(1.6) blur(12px); background: color-mix(in srgb, var(--surface) 88%, transparent); }
@@ -356,6 +360,11 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
     </form>
     <div class="settings" id="lastRefresh"></div>
   </section>
+
+  <footer class="site-foot">
+    <div id="footLine">© PTCG Price · ptcgprice.com</div>
+    <small>个人制作的非官方工具，与 The Pokémon Company、任天堂无关。Pokémon 及相关名称、图片为其各自所有者的商标。价格仅供参考。</small>
+  </footer>
 </div>
 
 <nav class="bottom">
@@ -525,8 +534,9 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.27 · ptcgprice.com";
+const APP_VERSION = "10.28 · 日历修正 + 页脚";
 $("appVer").textContent = "版本 " + APP_VERSION;
+$("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
 const BUILTIN_PROXY = "https://api.ptcgprice.com";
 function proxyUrl() {
@@ -3119,7 +3129,7 @@ function renderCalendar() {
     el.innerHTML = `<img class="cal-thumb" alt="" loading="lazy">
       <div class="cal-meta">
         <div class="cal-name"><span class="lang-pill" data-l="${x.region}">${LANGS[x.region]}</span>${esc(x.name)}</div>
-        <div class="cal-date">${esc([calDateText(x), x.price, x.type].filter(Boolean).join(" · "))}</div>
+        <div class="cal-date">${esc([calDateText(x), x.src === "tcgp" ? "" : x.price, x.type].filter(Boolean).join(" · "))}</div>
         <div class="cal-count ${cd.cls}" data-cal="${esc(x.id)}">${esc(cd.text)}</div>
       </div>`;
     const im = el.querySelector("img"); im.src = calImg(x.img); im.onerror = () => { im.style.visibility = "hidden"; };
@@ -3139,7 +3149,8 @@ function openCalItem(x) {
   $("calName").innerHTML = `<span class="lang-pill" data-l="${x.region}">${LANGS[x.region]}</span> ${esc(x.name)}`;
   $("calDate").textContent = [calDateText(x), x.type].filter(Boolean).join(" · ");
   const cd = calCountdown(x); $("calCount").textContent = cd.text; $("calCount").className = `cal-count ${cd.cls}`; $("calCount").dataset.cal = x.id;
-  $("calPrice").textContent = x.price || "";
+  // 官方价（日版官网有写）；TCGplayer 的是预售市场价（通常有溢价），注明不是官方原价
+  $("calPrice").textContent = x.price || (x.market ? `TCGplayer 预售市价 ${x.market}（有溢价，不是官方原价）` : "");
   $("calDesc").textContent = x.desc || (x.region === "zh-cn" ? "简中官网的商品介绍写在图片里，左右滑动看图。" : "");
   $("calContents").innerHTML = (x.contents || []).map((s) => `<li>${esc(s)}</li>`).join("");
   $("calLink").href = x.link; $("calLink").textContent = `查看来源：${x.from || "官网"}`;
