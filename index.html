@@ -135,6 +135,9 @@ header.top h1 .ver { display: block; font-size: 11px; font-weight: 500; color: v
 .pill { display: inline-block; font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .pill.saved { border-color: var(--good); color: var(--good); }
 .row-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; align-items: center; }
+/* 同一张卡图的其他版本：认错版本时点一下就换 */
+.versions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.versions button { border: 1px dashed var(--line); background: var(--bg); color: var(--fg); border-radius: 999px; padding: 3px 9px; font-size: 12px; }
 
 /* 本次扫描托盘：连续扫多张时，合计和小卡图一直在这里 */
 .tray { margin-top: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px; }
@@ -466,7 +469,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.23e · 改版本不误收藏";
+const APP_VERSION = "10.24 · 版本切换 + 简中30th";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
@@ -732,8 +735,11 @@ async function resolveAiText(text, sigs) {
   let parsed = parseText(text, true);
   if (!parsed.nums.length) return null;
   // AI 常把简中 151 的「151C」读成别的 C…C 代码（照抄见过的例子）：总数是 151 就按 151C 查
-  const n151 = parsed.nums.find((x) => x.total === 151);
-  if (n151 && parsed.tokens.some((t) => /^C[A-Z0-9.]{2,}C$/.test(t))) parsed = parseText(`151C ${n151.n}/151`, true);
+  // （简中 30th 的总数是 103，同理按 30th C 查）
+  const n151 = parsed.nums.find((x) => x.total === 151), n103 = parsed.nums.find((x) => x.total === 103);
+  const cCode = parsed.tokens.some((t) => /^C[A-Z0-9.]{2,}C$/.test(t));
+  if (n151 && cCode) parsed = parseText(`151C ${n151.n}/151`, true);
+  else if (n103 && cCode) parsed = parseText(`30THC ${n103.n}/103`, true);
   const cands = await identify(parsed);
   if (!cands.length) return { parsed, list: [] };
   // AI 读到没有资料的简中代码（只能手动登记）：多半是编的，不采用
@@ -778,8 +784,16 @@ async function candFromProduct(hit) {
     setName: p.set, setId: code, localId: a, official: total, tpNum: String(p.number), rel: p.rel || null, tpPrice: p.price, score: 3 };
 }
 
-// 简中卡在 TCGdex 里没有的系列，PriceCharting 有卡表、卡图和裸卡价（目前只有 151C）
-const ZH_CN_PC = { "151C": { id: "151C", name: "宝可梦卡牌151", pc: "pokemon chinese 151 collect" } };
+// 简中卡在 TCGdex 里没有的系列，PriceCharting 有卡表、卡图和裸卡价（151C、30th C）
+// jp / en：和它同图的日版、美版系列（认成日版 / 美版时，用来给「其实是简中卡」按钮）；pcSet：PriceCharting 的系列名
+const ZH_CN_PC = {
+  "151C": { id: "151C", name: "宝可梦卡牌151", pc: "pokemon chinese 151 collect", pcSet: /Chinese 151/i, jp: /^SV2a$/i, en: /Scarlet & Violet 151/i },
+  "30THC": { id: "30thC", name: "30周年庆典", pc: "pokemon chinese 30th celebration", pcSet: /Chinese 30th/i, jp: /^M6a$/i, en: /(^|: )30th Celebration$/i },
+};
+// 卡底读到简中代码：C…C 商品编号，或者 151C / 30th C
+const ZH_CODE = /^C[A-Z0-9.]{2,}C$|^151C\d?$|^30THC$/;
+// 这张日版 / 美版卡有没有同图的简中系列
+const zhPcFor = (c) => Object.keys(ZH_CN_PC).find((k) => (c.lang === "ja" && ZH_CN_PC[k].jp.test(c.setId)) || (c.lang === "en" && ZH_CN_PC[k].en.test(c.setName)));
 function pcLookup(q, n) {
   const base = proxyUrl();
   if (!base) return null;
@@ -1199,7 +1213,8 @@ async function refineWithCode(canvas, words, parsed, votes = []) {
 function parseText(text, manual) {
   // 代码外框、竖线之类当作空格
   // 简中 151 的代码是「151C」，读成 / 写成「151 C」也算
-  const t = text.replace(/[|\\[\](){}<>]/g, " ").replace(/\s+/g, " ").trim().replace(/(^|\s)151 C(?=\s|$)/gi, "$1151C");
+  // 简中 30th 的代码是「30th C」，读成 / 写成「30thC」「30TH C」都算
+  const t = text.replace(/[|\\[\](){}<>]/g, " ").replace(/\s+/g, " ").trim().replace(/(^|\s)151 C(?=\s|$)/gi, "$1151C").replace(/(^|\s)30th ?C(?=\s|$)/gi, "$130THC");
   const fix = (s) => s.replace(/[Oo]/g, "0").replace(/[lI]/g, "1");
   const nums = [];
   let m;
@@ -1275,6 +1290,7 @@ async function identify(parsed) {
     if (/^C[A-Z0-9.]{2,}C$/.test(U)) addHit("zh-cn", idx["zh-cn"].map.get(U) || nearestSet(idx["zh-cn"].list, U, parsed) || { id: U, name: "" }, 3);
     // 简中 151：代码不是 C…C 格式，TCGdex 里也没有，卡表和价格用 PriceCharting 的
     if (/^151C\d?$/.test(U)) addHit("zh-cn", ZH_CN_PC["151C"], 3.5);
+    if (U === "30THC") addHit("zh-cn", ZH_CN_PC["30THC"], 3.5);
     // 日版 / 繁中：代码相同，繁中多一个 F
     let base = U, glued = false;
     if (!inJaTw(U) && U.endsWith("F") && inJaTw(U.slice(0, -1))) { base = U.slice(0, -1); glued = true; }
@@ -1447,7 +1463,9 @@ async function counterpart(c) {
   const idx = await getIndex();
   const U = String(c.setId).toUpperCase();
   const s = idx[other].map.get(U) || (other === "zh-tw" ? idx.ja.map.get(U) : null);
-  if (!s) return null;
+  // TCGdex 还没收录的新系列（比如 30th 的 M6a）：直接沿用日版的 TCGplayer 资料（繁中本来就参考日版价格）
+  if (!s) return c.tpOnly && c.tpId ? { lang: other, tpOnly: true, tpId: c.tpId, id: c.id, name: c.name, setName: c.setName, setId: c.setId,
+    localId: c.localId, official: c.official, tpNum: c.tpNum, rel: c.rel, enName: c.enName, score: c.score } : null;
   return candidate(other, s, { n: parseInt(c.localId, 10), total: c.official });
 }
 
@@ -1541,6 +1559,9 @@ function renderCard(c, choosable) {
 }
 
 async function offerSwitch(c, el) {
+  // 和简中系列同图（151、30th）：先放「其实是简中卡」
+  const zb = zhPcButton(c);
+  if (zb) el.querySelector("[data-act]").appendChild(zb);
   let alt = null;
   try { alt = await counterpart(c); } catch {}
   if (!alt || !el.isConnected) return;
@@ -1791,7 +1812,7 @@ async function startScan(opts = {}) {
       if (!scanning || my !== loopId) return;
       if (!r) { await sleep(200); continue; }
       firstAt = firstAt || Date.now();
-      const zhcn = recent.some((p) => p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t)));
+      const zhcn = recent.some((p) => p.tokens.some((t) => ZH_CODE.test(t)));
       // 1.5 秒内两次认出同一张卡图才算（中间夹着没认出的帧也没关系），一次就非常确定的直接算
       const again = r.ok && last && last.key === r.key && Date.now() - last.at < 1500;
       const steady = lastAny && lastAny.key === r.key && Date.now() - lastAny.at < 1500;
@@ -2117,8 +2138,9 @@ async function visAgrees(c, canvas) {
   try {
     if (!visIdMap) { visIdMap = new Map(); visIndex.meta.items.forEach((it, i) => visIdMap.set(it[0], i)); }
     const q = await vis.embed(canvas), top5 = vis.search(visIndex, q, 5), top = top5[0];
-    // 简中 151 和日版 / 美版 151 同图：画面最像的几张里有 151 的卡就算对得上
-    if (c.lang === "zh-cn" && /^151C/i.test(c.setId)) return top5.some((t) => /^SV2a:|Scarlet & Violet 151/i.test(visItem(t.i).set));
+    // 简中 151 / 30th 和日版、美版同图：画面最像的几张里有同图系列的卡就算对得上
+    const z = c.lang === "zh-cn" && Object.values(ZH_CN_PC).find((x) => x.id.toUpperCase() === String(c.setId).toUpperCase());
+    if (z) return top5.some((t) => { const p = visItem(t.i); return p.line === "pokemon-japan" ? z.jp.test(String(p.set).split(":")[0]) : z.en.test(p.set); });
     let id = c.tpId;
     if (!id && c.lang !== "zh-cn") { const p = await priceFor(c).catch(() => null); id = p && p.tpId; }
     const i = id ? visIdMap.get(id) : undefined;
@@ -2128,35 +2150,78 @@ async function visAgrees(c, canvas) {
     return s * inv[i] >= top.sim - 0.1;
   } catch { return true; }
 }
-// 日版 / 美版 151 的卡 → 简中 151（151C）里同名的卡：两边编号不一样（日版 193 的迷唇姐 ex 在简中是 183），按英文卡名在 PriceCharting 找
-async function cands151C(c) {
+// 「其他版本」按钮：all = 同一张卡图的各个版本（整卡比对的结果），curId = 现在显示的那个
+const verLabel = (p) => {
+  const [code, rest] = String(p.set).split(/:\s*/);
+  const set = p.line === "pokemon-japan" ? code : (rest || code).replace(/^Scarlet & Violet\s*/i, "").slice(0, 26);
+  return `${p.line === "pokemon" ? "美版" : "日版"} ${set} ${p.number}`;
+};
+function versionRow(el, c, curId, all) {
+  const meta = el.querySelector(".meta");
+  if (!meta) return;
+  const row = document.createElement("div"); row.className = "versions";
+  row.innerHTML = "<span>其他版本：</span>";
+  for (const t of all) {
+    if (t.p.id === curId) continue;
+    const b = document.createElement("button"); b.textContent = verLabel(t.p);
+    b.onclick = async () => {
+      cancelBg();
+      const alt = await candFromProduct({ p: t.p, s: { line: t.p.line } }).catch(() => null);
+      if (!alt) return;
+      alt.enName = t.p.name;
+      c._replaced = true; // 原来那张作废：不再自动收藏
+      if (c._autoKey) { lib = lib.filter((x) => x.key !== c._autoKey); saveLib(); }
+      removeFromTray(c);
+      const ne = mountCard(alt, false, null, el);
+      versionRow(ne, alt, t.p.id, all);
+      setStatus(`已改为 <b>${LANGS[alt.lang]}</b> · ${esc(verLabel(t.p))}`);
+    };
+    row.appendChild(b);
+  }
+  meta.appendChild(row);
+}
+// 日版 / 美版的卡 → 同图简中系列（151C、30th C）里同名的卡：编号不一定一样（日版 193 的迷唇姐 ex 在简中 151 是 183），
+// 按英文卡名在 PriceCharting 找
+async function candsZhPc(c, key) {
+  const z = ZH_CN_PC[key];
   let en = c.enName || c.tpName || (c.lang === "en" ? c.name : "");
   if (!en) { const p = await priceFor(c).catch(() => null); en = (p && p.name) || ""; }
   const base = proxyUrl();
   if (!en || !base) return [];
   const nm = cleanTpName(en).replace(/\s*\(.*?\)\s*/g, " ").replace(/\s+-\s+.*$/, "").trim();
   let j;
-  try { j = await getJSON(`${base}?pcs=${encodeURIComponent("pokemon chinese 151 collect " + nm)}`, `pcs.151c.${nm.toLowerCase()}`, 6 * 3600e3); } catch { return []; }
+  try { j = await getJSON(`${base}?pcs=${encodeURIComponent(z.pc + " " + nm)}`, `pcs.${key}.${nm.toLowerCase()}`, 6 * 3600e3); } catch { return []; }
   const want = nm.toLowerCase(), out = [];
   for (const p of j.items || []) {
-    const m = /Chinese 151/i.test(p.set) && String(p.name).match(/^(.*?)\s*(\[.*?\])?\s*#(\d+)\s*$/);
+    const m = z.pcSet.test(p.set) && String(p.name).match(/^(.*?)\s*(\[.*?\])?\s*#(\d+)\s*$/);
     if (!m || m[2] || m[1].toLowerCase() !== want) continue; // 大师球 / 精灵球纹这类异图版跳过
     const n = parseInt(m[3], 10), lid = String(n).padStart(3, "0");
-    out.push({ lang: "zh-cn", id: `151C-${lid}`, localId: lid, name: m[1], pcq: `${ZH_CN_PC["151C"].pc} #${n}`, pcImg: p.img || "",
-      setId: "151C", setName: ZH_CN_PC["151C"].name, official: 151, rel: null });
+    out.push({ lang: "zh-cn", id: `${z.id}-${lid}`, localId: lid, name: m[1], pcq: `${z.pc} #${n}`, pcImg: p.img || "",
+      setId: z.id, setName: z.name, official: null, rel: null });
   }
+  // 编号和日版一样的系列（30th C）：同名卡里编号也对上的排第一
+  const n0 = parseInt(c.localId, 10);
+  out.sort((a, b) => (parseInt(b.localId, 10) === n0) - (parseInt(a.localId, 10) === n0));
   return out;
 }
-async function switchTo151C(x) {
+async function switchToZhPc(x, key) {
+  const z = ZH_CN_PC[key];
   x._replaced = true;
   if (x._autoKey) { lib = lib.filter((y) => y.key !== x._autoKey); saveLib(); }
   removeFromTray(x);
-  setStatus("在简中 151 里找同名的卡…");
-  const list = await cands151C(x);
-  if (!list.length) return showResults(parseText(`151C ${parseInt(x.localId, 10)}`, true), false);
-  const res = await showResults({ nums: [{ n: parseInt(list[0].localId, 10), total: 151 }], tokens: [], twPrev: [], raw: "" }, false, list);
-  if (list.length > 1) setStatus(`简中 151 里有 ${list.length} 张「${esc(list[0].name)}」（普通 / 闪卡等），点你手上那张：`);
+  setStatus(`在简中「${esc(z.name)}」里找同名的卡…`);
+  const list = await candsZhPc(x, key);
+  if (!list.length) return showResults(parseText(`${z.id} ${parseInt(x.localId, 10)}`, true), false);
+  const res = await showResults({ nums: [{ n: parseInt(list[0].localId, 10), total: null }], tokens: [], twPrev: [], raw: "" }, false, list);
+  if (list.length > 1) setStatus(`简中「${esc(z.name)}」里有 ${list.length} 张「${esc(list[0].name)}」（普通 / 闪卡等），点你手上那张：`);
   return res;
+}
+function zhPcButton(x) {
+  const key = zhPcFor(x);
+  if (!key) return null;
+  const b = document.createElement("button"); b.className = "btn small"; b.textContent = `其实是简中卡（${ZH_CN_PC[key].id}）`;
+  b.onclick = () => { cancelBg(); switchToZhPc(x, key); };
+  return b;
 }
 // 拿不准是哪张卡时：每个卡名取最像的一个版本，列出最像的几张让你点
 const visGuess = (r, max = 4) => {
@@ -2217,7 +2282,7 @@ async function bgResolve(shots, list, hints = []) {
   // 读到简中代码：简中卡和日版同图，换成简中（之前已经读到的文字也先查一遍）
   // （AI 看不清时会编代码，比如把 151C 145/151 编成 CSV8C 151/151：AI 读到的只在查得到真实卡片资料时才采用）
   const zhcn = async (p, fromAi) => {
-    if (!p.nums.length || !p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t))) return false;
+    if (!p.nums.length || !p.tokens.some((t) => ZH_CODE.test(t))) return false;
     const cands = await identify(p).catch(() => []);
     if (my !== bgToken || cands.length !== 1) return my !== bgToken;
     if (fromAi && cands[0].manual) return false;
@@ -2285,14 +2350,18 @@ async function visShow(r, auto, hints = [], pick = visPick(r, hints), retry = nu
   const res = await showResults({ nums: [{ n, total: c.official }], tokens: [], twPrev: [], raw: "" }, auto, list);
   if (list.length > 1) setStatus(pick.guess ? "不太确定，最像的几张如下，点你手上那张：" : "同一张卡图有几个版本（日版 / 美版 / 复刻…），点你手上那张：");
   else $("status").insertAdjacentHTML("beforeend", ` · 整卡比对（相似度 ${Math.round(r.best.sim * 100)}%${pick.byText ? "，卡底文字确认版本" : ""}）`);
-  // 简中 151 和日版 / 美版 151 同图：151 的卡旁边放一个改成简中的按钮
-  $("results").querySelectorAll(":scope > .card").forEach((el, i) => {
-    const x = list[i], act = el.querySelector("[data-act]");
-    if (!x || !act || !((x.lang === "ja" && /^SV2a$/i.test(x.setId)) || /Scarlet & Violet 151/i.test(x.setName))) return;
-    const b = document.createElement("button"); b.className = "btn small"; b.textContent = "其实是简中卡（151C）";
-    b.onclick = () => { cancelBg(); switchTo151C(x); };
-    act.appendChild(b);
+  // 几张候选并排时：和简中系列同图的卡（151、30th）旁边放「其实是简中卡」（只显示一张时由 offerSwitch 放）
+  if (list.length > 1) $("results").querySelectorAll(":scope > .card").forEach((el, i) => {
+    const act = el.querySelector("[data-act]"), b = list[i] && zhPcButton(list[i]);
+    if (act && b) act.appendChild(b);
   });
+  // 只显示了一张：同一张卡图的其他版本（原版 / 复刻 / 日版 / 美版）放一排按钮，认错版本时点一下就换
+  if (list.length === 1 && !pick.guess) {
+    const cur = pick.list[0], seen = new Set();
+    const all = r.top.filter((t) => baseName(t.p.name) === baseName(cur.p.name) && r.best.sim - t.sim < 0.15 && !seen.has(t.p.id) && seen.add(t.p.id)).slice(0, 6);
+    const el = $("results").querySelector(":scope > .card");
+    if (el && all.length > 1) versionRow(el, c, cur.p.id, all);
+  }
   if (retry && list.length > 1) {
     const b = document.createElement("button"); b.className = "btn small"; b.textContent = "都不是，继续识别"; b.dataset.retry = 1;
     b.onclick = () => { cancelBg(); retry(); };
@@ -2386,7 +2455,7 @@ async function scanFromImage(img, quiet, opts = {}) {
     const r = await visPhoto(img).catch(() => null);
     photoGeom = r && r.geom;
     if (opts.skipVis) setStatus("识别中…");
-    const p = r && r.parsed, zhcn = p && p.tokens.some((t) => /^C[A-Z0-9.]{2,}C$|^151C\d?$/.test(t));
+    const p = r && r.parsed, zhcn = p && p.tokens.some((t) => ZH_CODE.test(t));
     const retry = () => { $("results").innerHTML = ""; scanFromImage(img, false, { skipVis: true }).catch((e) => setStatus("识别失败：" + esc(e.message))); };
     if (!opts.skipVis && r && !zhcn && (r.ok || r.best.sim >= 0.6)) {
       const res = await visShow(r, false, p ? [p] : [], r.ok ? undefined : visGuess(r), retry);
