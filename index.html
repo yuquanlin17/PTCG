@@ -525,9 +525,10 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.26 · 日历加简中";
+const APP_VERSION = "10.27 · ptcgprice.com";
 $("appVer").textContent = "版本 " + APP_VERSION;
-const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
+// 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
+const BUILTIN_PROXY = "https://api.ptcgprice.com";
 function proxyUrl() {
   const s = store.get("ptcg.proxy", "");
   if (s) return s.replace(/\/+$/, "");
