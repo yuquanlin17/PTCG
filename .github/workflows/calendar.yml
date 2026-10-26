@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm i --no-save tesseract.js@5.1.1 sharp@0.33.5
+      - run: npm i --no-save sharp@0.33.5
       - run: node tools/calendar.mjs
       - name: 识别模型
         run: |
