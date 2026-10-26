@@ -6,6 +6,12 @@ main = "worker.js"
 compatibility_date = "2026-10-21"
 workers_dev = true
 preview_urls = false
+# 自己的域名：api. 是价格服务器，ptcgprice.com / www. 是网站（Worker 转发 GitHub Pages）；DNS 和证书由 Cloudflare 自动建
+routes = [
+  { pattern = "api.ptcgprice.com", custom_domain = true },
+  { pattern = "ptcgprice.com", custom_domain = true },
+  { pattern = "www.ptcgprice.com", custom_domain = true },
+]
 
 [ai]
 binding = "AI"
