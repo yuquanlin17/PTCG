@@ -311,7 +311,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
     <div class="cal-head"><h2>发售日历</h2><small id="calUpdated"></small></div>
     <div class="filters" role="tablist" aria-label="按版本筛选" id="calFilters"></div>
     <div id="calList" class="cal-list"></div>
-    <p class="cal-note">倒计时按各地发售日 0 点算（日版东京时间、简中北京时间、美版美东时间）。资料每天自动更新一次，以官网为准。</p>
+    <p class="cal-note">倒计时按各地发售日 0 点算（日版东京时间、简中北京时间、美版美东时间）。日版、简中、美版新系列每天自动更新；美版周边商品手动整理。以官网为准。</p>
   </section>
 
   <!-- 收藏页 -->
@@ -525,7 +525,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.25 · 发售日历";
+const APP_VERSION = "10.26 · 日历加简中";
 $("appVer").textContent = "版本 " + APP_VERSION;
 const BUILTIN_PROXY = "https://ptcgprice.yuquanlin17.workers.dev";
 function proxyUrl() {
@@ -3042,7 +3042,8 @@ $("navCal").onclick = () => go("cal");
 $("navLib").onclick = () => go("lib");
 
 // ---------- 发售日历 ----------
-// 资料来自价格服务器（每天自动更新：日版官网、简中官网、TCGplayer 预售）和网站上的 cal-en.json（美版官网，每天由 GitHub 自动更新）
+// 资料有三份：价格服务器（每天自动更新：日版官网、TCGplayer 美版预售）、网站上的 cal-cn.json（简中官网，GitHub 每天自动更新）、
+// cal-en.json（美版官网的周边商品，手动整理）
 const CAL_TZ = { ja: 9, "zh-cn": 8, en: -5 }; // 各地发售日 0 点的时区（美版按美东）
 let calItems = null, calFilter = store.get("ptcg.calFilter", "all"), calTimer = 0;
 const calTarget = (x) => {
@@ -3064,18 +3065,17 @@ const calDateText = (x) => {
   const [y, m, d] = x.date.split("-").map(Number);
   return `${m}月${d}日（周${WEEK[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]}）`;
 };
-const calImg = (u) => (!u ? "" : u.startsWith("?") ? proxyUrl() + u : u); // 简中图片存在价格服务器上
+const calImg = (u) => u || ""; // 简中的图片存在网站自己的 cal-img/ 里（官网图片链接会过期）
 async function loadCalendar() {
   const base = proxyUrl();
-  const [srv, en] = await Promise.all([
-    base ? getJSON(`${base}?calendar=1`, "cal.srv", 3600e3).catch(() => null) : null,
-    fetch("cal-en.json", { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-  ]);
-  // 美版官网的资料：价格服务器读得到（没被反爬虫挡）就用它的，读不到用网站上的 cal-en.json；两边都有的取较新的
+  const site = (f) => fetch(f, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const [srv, en, cn] = await Promise.all([base ? getJSON(`${base}?calendar=1`, "cal.srv", 3600e3).catch(() => null) : null, site("cal-en.json"), site("cal-cn.json")]);
+  // 同一件商品出现在两份里时，取资料较全的（有日期 > 有图 > 较新）
+  const rank = (x) => (x.date ? 4 : 0) + (x.img ? 2 : 0);
   const byId = new Map();
-  for (const src of [en, srv]) for (const x of (src && src.items) || []) {
-    const old = byId.get(x.id);
-    if (!old || (src.at || 0) >= (old._at || 0)) byId.set(x.id, { ...x, _at: src.at || 0 });
+  for (const src of [en, cn, srv]) for (const x of (src && src.items) || []) {
+    const old = byId.get(x.id), y = { ...x, _at: src.at || 0 };
+    if (!old || rank(y) > rank(old) || (rank(y) === rank(old) && y._at >= old._at)) byId.set(x.id, y);
   }
   let items = [...byId.values()];
   // TCGplayer 预售里和官网重复的去掉
@@ -3087,7 +3087,7 @@ async function loadCalendar() {
   items = items.filter((x) => { const t = calTarget(x); return t == null || t >= keep; });
   items.sort((a, b) => (calTarget(a) ?? 9e15) - (calTarget(b) ?? 9e15));
   calItems = items;
-  const at = Math.max((srv && srv.at) || 0, (en && en.at) || 0);
+  const at = Math.max((srv && srv.at) || 0, (cn && cn.at) || 0);
   $("calUpdated").textContent = at ? `更新于 ${new Date(at).toLocaleDateString()}` : "";
   return items;
 }
