@@ -1,0 +1,21 @@
+{
+  "at": "2026-10-26",
+  "note": "美版建议零售价（USD）。Pokémon 官方不公布美版建议零售价，这里是经销商公布的标价，手动整理自 The Lab TCG、TrackaLacker、Lv1 Gaming 等。键是商品名（小写）。",
+  "items": {
+    "delta reign booster pack": { "usd": 4.49, "src": "The Lab TCG" },
+    "delta reign sleeved booster pack": { "usd": 4.49, "src": "The Lab TCG" },
+    "delta reign booster pack art bundle [set of 4]": { "usd": 17.96, "src": "The Lab TCG（4 包 × 单包价）" },
+    "delta reign single pack blister [spritzee]": { "usd": 5.49, "src": "The Lab TCG（经销商标价）" },
+    "delta reign 3 pack blister [seel]": { "usd": 13.99, "src": "The Lab TCG（经销商标价）" },
+    "delta reign elite trainer box": { "usd": 49.99, "src": "The Lab TCG / TrackaLacker" },
+    "delta reign pokemon center elite trainer box (exclusive)": { "usd": 59.99, "src": "The Lab TCG" },
+    "delta reign booster bundle": { "usd": 26.94, "src": "The Lab TCG / PHD Games" },
+    "delta reign booster box": { "usd": 161.64, "src": "The Lab TCG / PHD Games" },
+    "delta reign build & battle box": { "usd": 21.99, "src": "The Lab TCG（10/24 预发布活动先发售）" },
+    "30th celebration battle deck—espeon ex and 30th celebration battle deck—umbreon ex": { "usd": 19.99, "src": "TrackaLacker / Lv1 Gaming（每盒）" },
+    "30th celebration figure collection": { "usd": 29.99, "src": "TrackaLacker / Lv1 Gaming" },
+    "30th celebration ditto premium collection": { "usd": 39.99, "src": "TrackaLacker / Lv1 Gaming" },
+    "30th celebration ultra-premium collections—day & night": { "usd": 179.99, "src": "TrackaLacker / Lv1 Gaming（每盒）" },
+    "30th celebration binder collection": { "usd": 31.99, "src": "TrackaLacker / Lv1 Gaming" }
+  }
+}
