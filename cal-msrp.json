@@ -1,21 +1,127 @@
 {
-  "at": "2026-10-26",
-  "note": "美版建议零售价（USD）。Pokémon 官方不公布美版建议零售价，这里是经销商公布的标价，手动整理自 The Lab TCG、TrackaLacker、Lv1 Gaming 等。键是商品名（小写）。",
-  "items": {
-    "delta reign booster pack": { "usd": 4.49, "src": "The Lab TCG" },
-    "delta reign sleeved booster pack": { "usd": 4.49, "src": "The Lab TCG" },
-    "delta reign booster pack art bundle [set of 4]": { "usd": 17.96, "src": "The Lab TCG（4 包 × 单包价）" },
-    "delta reign single pack blister [spritzee]": { "usd": 5.49, "src": "The Lab TCG（经销商标价）" },
-    "delta reign 3 pack blister [seel]": { "usd": 13.99, "src": "The Lab TCG（经销商标价）" },
-    "delta reign elite trainer box": { "usd": 49.99, "src": "The Lab TCG / TrackaLacker" },
-    "delta reign pokemon center elite trainer box (exclusive)": { "usd": 59.99, "src": "The Lab TCG" },
-    "delta reign booster bundle": { "usd": 26.94, "src": "The Lab TCG / PHD Games" },
-    "delta reign booster box": { "usd": 161.64, "src": "The Lab TCG / PHD Games" },
-    "delta reign build & battle box": { "usd": 21.99, "src": "The Lab TCG（10/24 预发布活动先发售）" },
-    "30th celebration battle deck—espeon ex and 30th celebration battle deck—umbreon ex": { "usd": 19.99, "src": "TrackaLacker / Lv1 Gaming（每盒）" },
-    "30th celebration figure collection": { "usd": 29.99, "src": "TrackaLacker / Lv1 Gaming" },
-    "30th celebration ditto premium collection": { "usd": 39.99, "src": "TrackaLacker / Lv1 Gaming" },
-    "30th celebration ultra-premium collections—day & night": { "usd": 179.99, "src": "TrackaLacker / Lv1 Gaming（每盒）" },
-    "30th celebration binder collection": { "usd": 31.99, "src": "TrackaLacker / Lv1 Gaming" }
-  }
+    "at":  "2026-10-26",
+    "note":  "美版建议零售价（USD）。Pokémon 官方不公布美版建议零售价；sets 由 GitHub 每天从 The Lab TCG 自动更新（经销商标价），items 是手动整理的备用。",
+    "sets":  {
+                 "delta reign":  {
+                                     "url":  "https://thelabtcg.com/launch/delta-reign",
+                                     "at":  "2026-10-26",
+                                     "products":  {
+                                                      "build \u0026 battle box":  21.99,
+                                                      "pokemon center elite trainer box (exclusive)":  59.99,
+                                                      "sleeved booster pack":  4.49,
+                                                      "booster pack art bundle [set of 4]":  17.96,
+                                                      "single pack blister [spritzee]":  5.49,
+                                                      "3 pack blister [seel]":  13.99,
+                                                      "elite trainer box":  49.99,
+                                                      "booster pack":  4.49,
+                                                      "booster bundle":  26.94,
+                                                      "booster box":  161.64
+                                                  }
+                                 },
+                 "30th celebration":  {
+                                          "url":  "https://thelabtcg.com/launch/30th-celebration",
+                                          "at":  "2026-10-26",
+                                          "products":  {
+                                                           "2-pack blister":  9.99,
+                                                           "pokemon center elite trainer box":  59.99,
+                                                           "ex box [set of 2]":  43.98,
+                                                           "knock out collection":  9.99,
+                                                           "sylveon ex box":  21.99,
+                                                           "elite trainer box":  49.99,
+                                                           "tech sticker collection [set of 2]":  29.98,
+                                                           "greninja ex box":  21.99,
+                                                           "tech sticker collection [lucario]":  14.99,
+                                                           "tech sticker collection [alolan exeggutor]":  14.99,
+                                                           "poster collection":  14.99,
+                                                           "binder collection":  31.99,
+                                                           "mini tin [mew]":  9.99,
+                                                           "mini tin [umbreon]":  9.99,
+                                                           "booster bundle":  26.94,
+                                                           "mini tin [mewtwo]":  9.99,
+                                                           "mini tin [lapras]":  9.99,
+                                                           "mini tin [espeon]":  9.99,
+                                                           "mini tin [night pikachu]":  9.99,
+                                                           "mini tin [day pikachu]":  9.99,
+                                                           "mini tin [zapdos]":  9.99,
+                                                           "mini tin [greninja]":  9.99,
+                                                           "mini tin display":  99.9,
+                                                           "mini tin [moltres]":  9.99,
+                                                           "battle deck [umbreon ex]":  19.99,
+                                                           "battle deck [espeon ex]":  19.99,
+                                                           "figure collection [mew]":  29.99,
+                                                           "figure collection [mewtwo]":  29.99,
+                                                           "ditto premium collection":  39.99,
+                                                           "ultra-premium collection [night]":  179.99,
+                                                           "ultra-premium collection [day]":  179.99,
+                                                           "ex tin [sylveon ex] (international version)":  21.99,
+                                                           "ex tin [greninja ex] (retail version)":  21.99,
+                                                           "ex tin [set of 2] (retail version)":  43.98,
+                                                           "ex tin [set of 2] (international version)":  43.98,
+                                                           "ex tin [sylveon ex] (retail version)":  21.99,
+                                                           "ex tin [greninja ex] (international version)":  21.99
+                                                       }
+                                      }
+             },
+    "items":  {
+                  "delta reign booster pack":  {
+                                                   "usd":  4.49,
+                                                   "src":  "The Lab TCG"
+                                               },
+                  "delta reign sleeved booster pack":  {
+                                                           "usd":  4.49,
+                                                           "src":  "The Lab TCG"
+                                                       },
+                  "delta reign booster pack art bundle [set of 4]":  {
+                                                                         "usd":  17.96,
+                                                                         "src":  "The Lab TCG（4 包 × 单包价）"
+                                                                     },
+                  "delta reign single pack blister [spritzee]":  {
+                                                                     "usd":  5.49,
+                                                                     "src":  "The Lab TCG（经销商标价）"
+                                                                 },
+                  "delta reign 3 pack blister [seel]":  {
+                                                            "usd":  13.99,
+                                                            "src":  "The Lab TCG（经销商标价）"
+                                                        },
+                  "delta reign elite trainer box":  {
+                                                        "usd":  49.99,
+                                                        "src":  "The Lab TCG / TrackaLacker"
+                                                    },
+                  "delta reign pokemon center elite trainer box (exclusive)":  {
+                                                                                   "usd":  59.99,
+                                                                                   "src":  "The Lab TCG"
+                                                                               },
+                  "delta reign booster bundle":  {
+                                                     "usd":  26.94,
+                                                     "src":  "The Lab TCG / PHD Games"
+                                                 },
+                  "delta reign booster box":  {
+                                                  "usd":  161.64,
+                                                  "src":  "The Lab TCG / PHD Games"
+                                              },
+                  "delta reign build \u0026 battle box":  {
+                                                              "usd":  21.99,
+                                                              "src":  "The Lab TCG（10/24 预发布活动先发售）"
+                                                          },
+                  "30th celebration battle deck—espeon ex and 30th celebration battle deck—umbreon ex":  {
+                                                                                                             "usd":  19.99,
+                                                                                                             "src":  "TrackaLacker / Lv1 Gaming（每盒）"
+                                                                                                         },
+                  "30th celebration figure collection":  {
+                                                             "usd":  29.99,
+                                                             "src":  "TrackaLacker / Lv1 Gaming"
+                                                         },
+                  "30th celebration ditto premium collection":  {
+                                                                    "usd":  39.99,
+                                                                    "src":  "TrackaLacker / Lv1 Gaming"
+                                                                },
+                  "30th celebration ultra-premium collections—day \u0026 night":  {
+                                                                                      "usd":  179.99,
+                                                                                      "src":  "TrackaLacker / Lv1 Gaming（每盒）"
+                                                                                  },
+                  "30th celebration binder collection":  {
+                                                             "usd":  31.99,
+                                                             "src":  "TrackaLacker / Lv1 Gaming"
+                                                         }
+              }
 }
