@@ -29,12 +29,37 @@ function parseCnList(html) {
   }
   return out;
 }
+// 文章：图片 + 文字。多数文章写着「商品规格」：商品名称 / 发售时间（2026年11月6日10时起）/ 建议零售价（10元/包）……
+// 也有只放宣传图的文章，那种才需要看图读日期
 function parseCnArticle(html) {
   const i = html.indexOf("article-detail");
   const body = i > 0 ? html.slice(i) : html;
   const stop = body.search(/最新资讯/);
   const main = stop > 0 ? body.slice(0, stop) : body;
-  return [...new Set([...main.matchAll(/<img[^>]+src="(https:\/\/image\.pokemon\.com\.cn\/wp-content\/uploads\/[^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, "&")))];
+  const imgs = [...new Set([...main.matchAll(/<img[^>]+src="(https:\/\/image\.pokemon\.com\.cn\/wp-content\/uploads\/[^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, "&")))];
+  // 正文切成一段一段的文字（前两段是公布日期和标题）
+  const parts = main.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, "").split(/<[^>]+>/).map(decodeHtml).filter(Boolean).slice(2);
+  const og = decodeHtml((html.match(/<meta property="og:description" content="([^"]*)"/) || [])[1] || "");
+  const specAt = parts.findIndex((s) => /^商品规格/.test(s));
+  const desc = (specAt > 0 ? parts.slice(0, specAt) : parts).filter((s) => s.length > 18 && !/^目录/.test(s)).slice(0, 4).join("\n");
+  // 规格：「标签」和「内容」常是分开的两段，合成一行
+  const LABEL = /^(商品名称|发售时间|发售日期|建议零售价|零售价|内容物|商品内容|商品构成|规格|尺寸|发售渠道|销售渠道|备注)[：:]?$/;
+  const spec = [];
+  if (specAt >= 0) for (let k = specAt + 1; k < parts.length && spec.length < 24; k++) {
+    const s = parts[k];
+    if (LABEL.test(s) && parts[k + 1] && !LABEL.test(parts[k + 1])) { spec.push(`${s.replace(/[：:]$/, "")}：${parts[k + 1]}`); k++; }
+    else spec.push(s);
+  }
+  const text = [og, ...spec, ...parts].join("\n");
+  const timeLine = spec.find((s) => /^(发售时间|发售日期)/.test(s)) || "";
+  const dm = (timeLine + "\n" + text).match(/(20\d\d)年(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2})[时:：点])?/);
+  const priceLine = spec.find((s) => /^(建议零售价|零售价)/.test(s));
+  return {
+    imgs, desc: desc || og, spec: spec.filter((s) => !/^(发售时间|发售日期)/.test(s)),
+    date: dm ? `${dm[1]}-${dm[2].padStart(2, "0")}-${dm[3].padStart(2, "0")}` : null,
+    time: dm && dm[4] ? `${dm[4].padStart(2, "0")}:00` : "",
+    price: priceLine ? priceLine.replace(/^(建议零售价|零售价)：/, "建议零售价 ") : "",
+  };
 }
 // 慢一点、失败重试：请求太密集时官网会临时断开连接
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
@@ -67,13 +92,18 @@ const items = [];
 for (const e of list) {
   if (e.posted < recent) continue;
   const id = "cn:" + e.id, prev = known.get(id);
-  // 日期和图都齐了的不再读；缺一样的每次再试
-  if (prev && prev.date && prev.img) { items.push(prev); continue; }
-  const item = { id, src: "cn", region: "zh-cn", name: e.title, type: "", date: null, img: "", imgs: [], price: "", desc: "", contents: [],
+  // 日期、图、文字都齐了的不再读；缺一样的每次再试
+  if (prev && prev.date && prev.img && prev.desc !== undefined && prev.v === 2) { items.push(prev); continue; }
+  const item = { id, v: 2, src: "cn", region: "zh-cn", name: e.title, type: "", date: null, time: "", img: "", imgs: [], price: "", desc: "", contents: [],
     link: `https://www.pokemon.cn/tcg/product/${e.id}.html`, from: "简中官网", posted: e.posted };
   try {
-    // 缩略图上一般就写着「xxxx年x月x日发售」；没有的话再看文章里的图（最多 8 张）。存前 4 张用来显示（压成宽 900 的 JPEG）
-    const pics = [e.thumb, ...parseCnArticle(await (await get(item.link, CN_HEADERS)).text())].filter(Boolean).slice(0, 8);
+    // 先读文章文字（发售时间、建议零售价、商品规格）；文字里没有日期的，再看图（缩略图上常写着「xxxx年x月x日发售」）
+    const art = parseCnArticle(await (await get(item.link, CN_HEADERS)).text());
+    const okDate = (d) => d && d >= e.posted && d <= ymd(new Date(Date.parse(e.posted) + 183 * 864e5));
+    if (okDate(art.date)) { item.date = art.date; item.time = art.time; }
+    item.desc = art.desc; item.contents = art.spec; item.price = art.price;
+    // 存前 4 张图用来显示（压成宽 900 的 JPEG）
+    const pics = [e.thumb, ...art.imgs].filter(Boolean).slice(0, 8);
     let saved = 0, asked = 0;
     for (const pic of pics) {
       if (item.date && saved >= 4) break;
