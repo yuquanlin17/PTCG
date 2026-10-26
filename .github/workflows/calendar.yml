@@ -1,4 +1,4 @@
-# 每天更新发售日历的简中部分：简中官网（发售日写在宣传图上，Worker 下载不了图片）→ cal-cn.json
+# 每天更新发售日历：简中官网（Worker 下载不了图片）→ cal-cn.json；美版建议零售价（The Lab TCG）→ cal-msrp.json
 # 第一次跑时顺便把识别模型（42MB）放进网站，这样在中国也能下载
 name: 更新发售日历
 on:
@@ -26,5 +26,5 @@ jobs:
         run: |
           git config user.name "calendar-bot"
           git config user.email "calendar-bot@users.noreply.github.com"
-          git add -A cal-cn.json cal-img models
+          git add -A cal-cn.json cal-msrp.json cal-img models
           git diff --cached --quiet || (git commit -m "更新发售日历" && git push)
