@@ -9,6 +9,9 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
     const url = new URL(request.url);
+    // ptcgprice.com：网站本身（从 GitHub Pages 取来转发并缓存；GitHub Pages 在中国时好时坏，经 Cloudflare 更稳）
+    // api.ptcgprice.com 和 workers.dev 地址：下面的价格服务器
+    if (url.hostname === "ptcgprice.com" || url.hostname === "www.ptcgprice.com") return serveSite(request, url, ctx);
     // POST /read：网页自带的识别读不出卡底文字时，交给 Workers AI 的看图模型来读（需要绑定 Workers AI，变量名 AI）
     if (url.pathname === "/read" && request.method === "POST") return readCard(request, env, cors);
     // POST /track {ids}：登记要每天记录价格的卡（收藏里的卡），需要绑定 KV，变量名 KV
@@ -91,6 +94,30 @@ export default {
   // 测试用：日历的解析函数（Cloudflare 只认 fetch / scheduled，多出来的属性不影响）
   _cal: { parseJaApi, mergeCalendar },
 };
+
+// ---------- 网站：ptcgprice.com 转发 GitHub Pages 上的文件 ----------
+// 网页、脚本、日历资料缓存 5 分钟（更新后很快生效）；识别模型、卡图库、图片缓存 1 天
+const SITE_ORIGIN = "https://yuquanlin17.github.io/PTCG";
+async function serveSite(request, url, ctx) {
+  if (url.hostname === "www.ptcgprice.com") return Response.redirect("https://ptcgprice.com" + url.pathname + url.search, 301);
+  if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method Not Allowed", { status: 405 });
+  let path = url.pathname;
+  if (path.endsWith("/")) path += "index.html";
+  if (path.includes("..")) return new Response("Bad Request", { status: 400 });
+  const cache = caches.default;
+  const key = new Request("https://site-cache.local" + path);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const r = await fetch(SITE_ORIGIN + path);
+  if (!r.ok) return new Response(r.status === 404 ? "Not Found" : "Upstream error", { status: r.status === 404 ? 404 : 502 });
+  const short = /\.(html|js|json|webmanifest)$/i.test(path) && !/\/vis\/meta\.json$/.test(path);
+  const headers = new Headers({ "content-type": r.headers.get("content-type") || "application/octet-stream", "cache-control": short ? "public, max-age=300" : "public, max-age=86400" });
+  const len = r.headers.get("content-length");
+  if (len) headers.set("content-length", len);
+  const resp = new Response(r.body, { status: 200, headers });
+  ctx.waitUntil(cache.put(key, resp.clone()));
+  return resp;
+}
 
 // ---------- 浏览器一样的请求头（不然容易被当成机器人） ----------
 const BROWSER_HEADERS = {
