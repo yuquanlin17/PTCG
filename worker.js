@@ -14,7 +14,7 @@ export default {
     if (url.hostname === "ptcgprice.com" || url.hostname === "www.ptcgprice.com") return serveSite(request, url, ctx);
     // POST /read：网页自带的识别读不出卡底文字时，交给 Workers AI 的看图模型来读（需要绑定 Workers AI，变量名 AI）
     if (url.pathname === "/read" && request.method === "POST") return readCard(request, env, cors);
-    if (url.pathname === "/caldate" && request.method === "POST") return readCard(request, env, cors, DATE_PROMPT);
+    if (url.pathname === "/caldate" && request.method === "POST") return readCard(request, env, cors, DATE_PROMPT, 60);
     // POST /track {ids}：登记要每天记录价格的卡（收藏里的卡），需要绑定 KV，变量名 KV
     if (url.pathname === "/track" && request.method === "POST") return track(request, env, cors);
     // ?kv=商品id：读 Worker 每天记下的价格
@@ -288,9 +288,11 @@ const READ_PROMPT =
   "Ignore the single regulation letter before the code and the rarity letters after the number. If you cannot read the number, reply NONE.";
 
 // POST /caldate {image}：从简中商品宣传图里读发售日（GitHub 自动任务用；宣传图上的艺术字一般的文字识别认不出来）
-const DATE_PROMPT = "This is a promotional image for a Pokemon card product in Simplified Chinese. If the image shows a release date " +
-  "(for example 2026年11月6日发售), reply with ONLY that date as YYYY-MM-DD. If there is no release date in the image, reply NONE.";
-async function readCard(request, env, cors, prompt = READ_PROMPT) {
+// 不给具体日期的例子：AI 看不到日期时会照抄例子（之前把没写日期的图也读成了例子里的日期）
+const DATE_PROMPT = "Look at this promotional image for a Pokemon card product in Simplified Chinese. Is a release date actually printed on it, " +
+  "written with the characters 年, 月 and 日 (usually followed by 发售)? If yes, copy that printed date exactly, digit by digit, in the form " +
+  "YYYY年M月D日. Do not guess or infer a date that is not visibly printed. If no such date is printed in the image, reply exactly NONE.";
+async function readCard(request, env, cors, prompt = READ_PROMPT, maxTokens = 24) {
   const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json", ...cors } });
   if (!env.AI) return json({ error: "Workers AI 未绑定（Settings → Bindings → Workers AI，变量名 AI）" }, 501);
   let bytes, b64;
@@ -302,7 +304,7 @@ async function readCard(request, env, cors, prompt = READ_PROMPT) {
     bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   } catch { return json({ error: "bad request" }, 400); }
-  try { return json({ text: (await aiAsk(env, bytes, b64, prompt, 24, "image/jpeg")).slice(0, 80) }); }
+  try { return json({ text: (await aiAsk(env, bytes, b64, prompt, maxTokens, "image/jpeg")).slice(0, 200) }); }
   catch (e) { return json({ error: "ai failed: " + String(e && e.message || e).slice(0, 200) }, 502); }
 }
 // 问看图模型一个问题。Workers AI 的图片输入格式改过几次：先用现在的写法（图片放在消息里），不行再试旧写法
