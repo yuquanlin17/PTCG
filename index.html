@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="卡价扫描">
 <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
+<meta name="theme-color" content="#0f1116">
 <title>PTCG 卡价扫描</title>
 <style>
 /* 布局：底部双标签（扫描 / 收藏），单列手机优先 */
@@ -534,7 +537,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "10.29 · 日历价格和时间";
+const APP_VERSION = "10.30 · 新图标 + 自动零售价";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -3090,9 +3093,8 @@ async function loadCalendar() {
     if (!old || rank(y) > rank(old) || (rank(y) === rank(old) && y._at >= old._at)) byId.set(x.id, y);
   }
   let items = [...byId.values()];
-  // 美版建议零售价：手动整理的价格表（cal-msrp.json，按商品名对上）
-  const mp = (msrp && msrp.items) || {};
-  for (const x of items) { const m = x.region === "en" && mp[String(x.name).toLowerCase()]; if (m) { x.price = `建议零售价 $${m.usd.toFixed(2)}`; x.priceSrc = m.src; } }
+  // 美版建议零售价（cal-msrp.json，GitHub 每天更新）
+  for (const x of items) { const m = x.region === "en" && msrpFor(x, msrp); if (m) { x.price = `建议零售价 $${m.usd.toFixed(2)}`; x.priceSrc = m.src; } }
   // TCGplayer 预售里和官网重复的去掉
   const norm = (s) => String(s).toLowerCase().replace(/pok[eé]mon tcg:?|mega evolution|[—–:\-'’"().,&]/g, " ").replace(/\s+/g, " ").trim();
   const official = items.filter((x) => x.src === "en").map((x) => norm(x.name));
@@ -3105,6 +3107,28 @@ async function loadCalendar() {
   const at = Math.max((srv && srv.at) || 0, (cn && cn.at) || 0);
   $("calUpdated").textContent = at ? `更新于 ${new Date(at).toLocaleDateString()}` : "";
   return items;
+}
+// 美版商品 → 建议零售价：按「系列名 + 商品名」在价格表里找（价格表的商品名不带系列名）。
+// 不同款式（[Mew] / [Mewtwo]）当作同一件；名字更长的先比（「Booster Pack Art Bundle」不会被当成「Booster Pack」）；
+// 找不到再看手动整理的（items，按完整商品名）
+function msrpFor(x, msrp) {
+  if (!msrp) return null;
+  const low = (s) => String(s).toLowerCase().replace(/[—–]/g, " ").replace(/\s+/g, " ").trim();
+  const name = low(x.name);
+  for (const [title, set] of Object.entries(msrp.sets || {})) {
+    if (!name.startsWith(title)) continue;
+    const rest = name.slice(title.length).trim();
+    const cands = Object.entries(set.products).map(([p, usd]) => ({ p, base: low(p.replace(/\s*\[.*?\]/g, "")), usd }))
+      .filter((c) => rest === low(c.p) || rest === c.base || rest.startsWith(c.base + " ") || rest.startsWith(c.base + "s"))
+      .sort((a, b) => (rest === low(b.p)) - (rest === low(a.p)) || b.base.length - a.base.length);
+    if (!cands.length) continue;
+    // 同一件有几个款式、价格不一样（单个 / 两个装）：名字里提到的那款，否则取最便宜的单个
+    const same = cands.filter((c) => c.base === cands[0].base);
+    const hit = same.find((c) => rest === low(c.p)) || same.find((c) => { const v = (c.p.match(/\[(.*?)\]/) || [])[1]; return v && name.includes(low(v)); }) || same.sort((a, b) => a.usd - b.usd)[0];
+    return { usd: hit.usd, src: "The Lab TCG（经销商标价，每天自动更新）" };
+  }
+  const m = (msrp.items || {})[String(x.name).toLowerCase()];
+  return m ? { usd: m.usd, src: m.src } : null;
 }
 async function openCalendar() {
   if (!calItems) { $("calList").innerHTML = '<div class="empty">正在读取发售日历…</div>'; await loadCalendar().catch(() => (calItems = [])); }
