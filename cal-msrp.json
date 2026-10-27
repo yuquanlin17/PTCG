@@ -1,10 +1,10 @@
 {
- "at": "2026-10-26",
+ "at": "2026-10-27",
  "note": "美版建议零售价（USD）。Pokémon 官方不公布美版建议零售价；sets 由 GitHub 每天从 The Lab TCG 自动更新（经销商标价），items 是手动整理的备用。",
  "sets": {
   "delta reign": {
    "url": "https://thelabtcg.com/launch/delta-reign",
-   "at": "2026-10-26",
+   "at": "2026-10-27",
    "products": {
     "build & battle box": 21.99,
     "pokemon center elite trainer box (exclusive)": 59.99,
@@ -20,17 +20,17 @@
   },
   "30th celebration": {
    "url": "https://thelabtcg.com/launch/30th-celebration",
-   "at": "2026-10-26",
+   "at": "2026-10-27",
    "products": {
     "2-pack blister": 9.99,
     "pokemon center elite trainer box": 59.99,
     "ex box [set of 2]": 43.98,
     "knock out collection": 9.99,
     "sylveon ex box": 21.99,
-    "elite trainer box": 49.99,
     "tech sticker collection [set of 2]": 29.98,
-    "greninja ex box": 21.99,
+    "elite trainer box": 49.99,
     "tech sticker collection [lucario]": 14.99,
+    "greninja ex box": 21.99,
     "tech sticker collection [alolan exeggutor]": 14.99,
     "poster collection": 14.99,
     "binder collection": 31.99,
@@ -39,9 +39,9 @@
     "booster bundle": 26.94,
     "mini tin [mewtwo]": 9.99,
     "mini tin [lapras]": 9.99,
-    "mini tin [espeon]": 9.99,
-    "mini tin [night pikachu]": 9.99,
     "mini tin [day pikachu]": 9.99,
+    "mini tin [night pikachu]": 9.99,
+    "mini tin [espeon]": 9.99,
     "mini tin [zapdos]": 9.99,
     "mini tin [greninja]": 9.99,
     "mini tin display": 99.9,
