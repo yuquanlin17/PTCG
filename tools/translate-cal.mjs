@@ -55,14 +55,22 @@ async function translate(x, from, targets) {
       try {
         r = await fetch(ENDPOINT, {
           method: "POST",
-          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", accept: "application/json" },
+          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
           body: JSON.stringify({ model, temperature: 0.2, response_format: { type: "json_object" }, messages: [{ role: "system", content: SYSTEM }, { role: "user", content: user }] }),
         });
       } catch (e) { await sleep(5000); continue; }
       if (r.status === 429) { const wait = Math.min(120, +r.headers.get("retry-after") || 30); console.log(`  额度用完，等 ${wait} 秒`); await sleep(wait * 1000); continue; }
-      if (!r.ok) { console.log(`  ${model} HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`); break; }
+      const raw = await r.text();
+      if (!r.ok) { console.log(`  ${model} HTTP ${r.status}: ${raw.slice(0, 300)}`); break; }
+      let body;
+      try { body = JSON.parse(raw); } catch {
+        console.log(`  ${model} HTTP ${r.status} ${r.headers.get("content-type")}，回的不是 JSON：${JSON.stringify(raw.slice(0, 300))}`);
+        break; // 换下一个模型
+      }
       try {
-        const j = JSON.parse((await r.json()).choices[0].message.content);
+        const msg = body.choices && body.choices[0] && body.choices[0].message;
+        if (!msg || typeof msg.content !== "string") throw new Error("没有 choices[0].message.content：" + JSON.stringify(body).slice(0, 300));
+        const j = JSON.parse(msg.content.replace(/^```(?:json)?\s*|\s*```$/g, ""));
         const res = {};
         for (const t of targets) {
           const v = j[t];
@@ -70,7 +78,7 @@ async function translate(x, from, targets) {
           res[t] = { name: v.name, type: v.type || "", price: v.price || "", desc: v.desc || "", contents: Array.isArray(v.contents) ? v.contents.map(String) : [] };
         }
         return res;
-      } catch (e) { console.log(`  ${model} 回的格式不对：${e.message}`); }
+      } catch (e) { console.log(`  ${model} 回的格式不对：${e.message}`); break; }
     }
   }
   return null;
@@ -85,6 +93,8 @@ for (const x of items) {
   done++;
   if (tr) { out.items[x.id] = { h, ...tr }; console.log(`  ✓ ${x.id} ${String(x.name).slice(0, 40)}`); }
   else { failed++; if (prev) out.items[x.id] = prev; }
+  // 前 3 个全失败：多半是设置问题（权限 / 接口），别再一个个白试
+  if (done === 3 && failed === 3) { console.log("前 3 个都失败，这次先停下（看上面的错误信息）"); for (const y of items) if (!out.items[y.id] && old.items[y.id]) out.items[y.id] = old.items[y.id]; break; }
   await sleep(4500); // 免费额度：每分钟最多十几次
 }
 // 价格服务器这次没连上：它那部分（日版官网、TCGplayer 预售）的旧翻译照留
