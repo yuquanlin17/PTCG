@@ -15,9 +15,20 @@ const PROMO_WORDS = /(^|\s)(promos?|特典卡?|宣传卡?|推广卡?|プロモ(�
 // 卡名后缀（规则 / 形态）：从名字里拿掉，查到以后再按它筛
 const SUFFIXES = [
   ["vmax", /(vmax)$/i], ["vstar", /(vstar)$/i], ["vunion", /(v-?union)$/i], ["gx", /(gx)$/i], ["ex", /(ex)$/i], ["v", /(?<![a-z])(v)$/i],
-  ["break", /(break)$/i], ["prime", /(prime)$/i], ["lv.x", /(lv\.?x)$/i], ["star", /(☆|star)$/i],
+  ["break", /(break)$/i], ["prime", /(prime)$/i], ["lv.x", /(lv\.?x)$/i], ["star", /(☆|★|gold\s*star|star|星卡)$/i],
 ];
 const MEGA = /^(mega\s*|m\s+|超级|メガ|超級)/i;
+// 稀有度 / 版本说法（玩家常说「奇树SAR」「喷火龙金卡」「月伊异画」）。TCGplayer 上日版卡常常没写稀有度，所以只用来排序（对上的排前面），不筛掉
+const RARITY = [
+  [/(^|\s|(?<=[\u3040-\u9fff]))(sar|sir|特殊插画|スペシャルアート|特別插畫)(?=\s|$)/i, /Special Art Rare|Special Illustration Rare/i],
+  [/(^|\s|(?<=[\u3040-\u9fff]))(异画|異畫|alt\s*art|alternate\s*art|sa)(?=\s|$)/i, /Special Art Rare|Special Illustration Rare|Alternate Art|\(SA\)/i],
+  [/(^|\s|(?<=[\u3040-\u9fff]))(chr|csr)(?=\s|$)/i, /Character (Super )?Rare/i],
+  [/(^|\s|(?<=[\u3040-\u9fff]))(ar|ir|插画稀有|插畫稀有)(?=\s|$)/i, /^(Art Rare|Illustration Rare)\b/i],
+  [/(^|\s|(?<=[\u3040-\u9fff]))(sr|全图|全圖|full\s*art)(?=\s|$)/i, /Super Rare|Full Art/i],
+  [/(^|\s|(?<=[\u3040-\u9fff]))(ur|金卡|金色|gold|hyper)(?=\s|$)/i, /Ultra Rare|Hyper Rare|\bGold\b/i],
+  [/(^|\s|(?<=[\u3040-\u9fff]))(hr|彩虹|彩卡|rainbow)(?=\s|$)/i, /Hyper Rare|Rainbow|Secret Rare/i],
+  [/(^|\s|(?<=[\u3040-\u9fff]))(ssr|色违|色違|异色|shiny)(?=\s|$)/i, /Shiny/i],
+];
 
 export function parseQuery(text) {
   let t = " " + String(text || "").normalize("NFKC").replace(/[，,、;；]/g, " ").replace(/\s+/g, " ").trim() + " ";
@@ -42,6 +53,8 @@ export function parseQuery(text) {
   if (num == null && (m = t.match(/(^|\s)(s|sm|sv|m|xy|bw|dp|s8a)-p(?=\s|$)/i))) { code = m[2].toUpperCase() + "-P"; promo = true; t = t.replace(m[0], " "); }
   if (num == null && (m = t.match(/(^|\s)(\d{1,3})(?=\s|$)/))) { num = +m[2]; t = t.replace(m[0], " "); }
   t = t.replace(/\s+/g, " ").trim();
+  let rarity = null, rarityWord = "";
+  for (const [re, want] of RARITY) { const rm = t.match(re); if (rm) { rarity = want; rarityWord = rm[2]; t = t.replace(re, " ").replace(/\s+/g, " ").trim(); break; } }
   // 后缀 / Mega
   let suffix = null, mega = false;
   const bare = t.replace(/\s+/g, "");
@@ -52,7 +65,7 @@ export function parseQuery(text) {
     const xy = t.match(/\s*([xy])$/i);
     if (xy && t.length > 1) { megaXY = xy[1].toLowerCase(); t = t.slice(0, -xy[0].length).trim(); }
   }
-  return { langs, promo, num, total, code, suffix, mega, megaXY, set: setWord, name: t };
+  return { langs, promo, num, total, code, suffix, mega, megaXY, rarity, rarityWord, set: setWord, name: t };
 }
 
 // ---------- 词典 ----------
@@ -73,8 +86,9 @@ export function makeDict(json, aliases = {}) {
   const byEn = new Map(entries.map((e) => [e.en.toLowerCase(), e]));
   // 值以「=」开头的是「换成这句话再查」（指向某一张卡：「黄昏莉莉艾」→「=397/SM-P」），其他是英文卡名
   const all = Object.entries(aliases).filter(([k]) => !k.startsWith("_"));
-  const alias = new Map(all.filter(([, v]) => !(typeof v === "string" && v.startsWith("="))).map(([k, v]) => [norm(k), v]));
-  const rewrite = new Map(all.filter(([, v]) => typeof v === "string" && v.startsWith("=")).map(([k, v]) => [norm(k), v.slice(1).trim()]));
+  const isQ = (v) => (typeof v === "string" ? v.startsWith("=") : Array.isArray(v) && v.length && v.every((x) => String(x).startsWith("=")));
+  const alias = new Map(all.filter(([, v]) => !isQ(v)).map(([k, v]) => [norm(k), v]));
+  const rewrite = new Map(all.filter(([, v]) => isQ(v)).map(([k, v]) => [norm(k), [].concat(v).map((x) => x.slice(1).trim())]));
   return { entries, byEn, alias, rewrite };
 }
 
@@ -87,12 +101,18 @@ function lev(a, b) {
   }
   return d[b.length];
 }
-// 整句是「换一句话查」的绰号：返回换过的句子（版本词等其他部分保留），否则原样返回
+// 整句是「换一句话查」的绰号：返回换过的句子（可能几句，版本词等其他部分保留），否则返回 [原句]
 export function aliasRewrite(dict, text) {
-  const q = parseQuery(text), k = norm(q.name);
-  if (!k || !dict.rewrite || !dict.rewrite.has(k)) return text;
+  const q = parseQuery(text);
+  if (!dict.rewrite) return [text];
+  // 先看整句（去掉版本词，「月亮伊布异画」整个是绰号），再看去掉稀有度 / 编号以后的名字
+  let bare = " " + String(text || "").normalize("NFKC") + " ";
+  for (const [, re] of LANG_WORDS) bare = bare.replace(re, " ");
+  for (const [, re] of LANG_TAIL) bare = bare.trim().replace(re, "");
+  const k = [norm(bare), norm(q.name)].find((x) => x && dict.rewrite.has(x));
+  if (!k) return [text];
   const extra = [...q.langs].map((l) => ({ ja: "日版", en: "美版", "zh-cn": "简中", "zh-tw": "繁中" })[l]).join(" ");
-  return (dict.rewrite.get(k) + " " + extra).trim();
+  return dict.rewrite.get(k).map((x) => (x + " " + extra).trim());
 }
 // 名字 → 词典里最像的几条（每条带分数）。返回的 en 是用来在卡图库（英文名）里找卡的
 export function matchNames(dict, name, depth = 0) {
@@ -169,7 +189,12 @@ export function findCards(meta, q, names, max = 60) {
       }
       if (!s) continue;
     } else if (q.name) continue; // 有名字但词典里没找到：交给 TCGplayer 搜索
+    else if (q.rarity && !q.rarity.test(it[4] + " " + it[3])) continue;
     if (q.suffix && !SUF_RE[q.suffix].test(it[3])) continue;
+    if (q.rarity) {
+      if (q.rarity.test(it[4] + " " + it[3])) s += 40;
+      else if (!it[4] || /^none$/i.test(it[4])) { const [a, b] = String(it[2]).split("/").map((x) => parseInt(x, 10)); if (a > b) s += 25; } // 没写稀有度：编号超过总数的多半是高稀有度
+    }
     if (q.mega && !/^(mega|m)\s/i.test(it[3])) continue;
     if (q.megaXY && !new RegExp(`\\s${q.megaXY}(\\s|$)`, "i").test(base)) continue;
     if (q.set === "151" && !/151/.test(set[0])) continue;
