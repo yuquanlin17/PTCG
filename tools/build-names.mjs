@@ -101,10 +101,12 @@ for (const [en, j, t] of cards) {
   if (t.includes("的")) vote(v.tw, t.split("的")[0]);
   owners.set(m[1], v);
 }
-const haveEn = new Set(cards.map((c) => c[0].toLowerCase()));
+const byEnCard = new Map(cards.map((c) => [c[0].toLowerCase(), c]));
 for (const [en, v] of owners) {
-  if (haveEn.has(en.toLowerCase()) || spEn.has(en.toLowerCase())) continue;
-  const j = top(v.ja), t = top(v.tw);
+  if (spEn.has(en.toLowerCase())) continue;
+  const j = top(v.ja), t = top(v.tw), have = byEnCard.get(en.toLowerCase());
+  // 已经有这个训练家的卡名（老卡只有日文名）：缺的语言补上
+  if (have) { if (!have[1] && j) have[1] = j; if (!have[2] && t) { have[2] = t; have[3] = toHans(t); } continue; }
   if (j || t) cards.push([en, j, t, t ? toHans(t) : "", 0]);
 }
 console.log(`卡名：${cards.length}`);
