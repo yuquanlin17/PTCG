@@ -4,12 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- 状态栏不透明：iOS 26 起「black-translucent」会在页面顶部加一层模糊，而且整页高度会少掉一截状态栏的高度（底部导航下面空出一条） -->
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="卡价扫描">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
-<meta name="theme-color" content="#0f1116">
+<meta name="theme-color" content="#f3f4f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1116" media="(prefers-color-scheme: dark)">
 <title>PTCG 卡价扫描</title>
 <style>
 /* 布局：底部双标签（扫描 / 收藏），单列手机优先 */
@@ -2845,16 +2847,29 @@ function showList(cands, title) {
   setTimeout(() => $("status").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
 }
 // 名字查卡。返回 true 表示处理了（找到了或者明确说了没找到）
-async function nameSearch(s) {
+// s：一句或几句（绰号可以指向几张卡：月伊 → 日版 095/069 + 美版 215/203）；title：显示用的原话
+async function nameSearch(s, title) {
   let L;
   try { L = await searchLib(); } catch { return false; }
   const { S, dict, meta } = L;
-  s = S.aliasRewrite(dict, s); // 指向某一张卡的绰号（黄昏莉莉艾 → 397/SM-P）
+  const list = [].concat(s);
+  if (list.length > 1) {
+    const seen = new Set(), prods = [];
+    for (const one of list) {
+      const q1 = S.parseQuery(one), n1 = q1.name ? S.matchNames(dict, q1.name) : [];
+      for (const h of S.findCards(meta, q1, n1, 20)) { const p = metaProduct(meta, h.i); if (!seen.has(p.id)) { seen.add(p.id); prods.push(p); } }
+    }
+    if (!prods.length) return false;
+    const cands = (await Promise.all(prods.map(prodCand))).filter(Boolean);
+    showList(cands, `「${esc(title || list[0])}」：${cands.length} 张，点你手上那张：`);
+    return true;
+  }
+  s = list[0];
   const q = S.parseQuery(s);
   const names = q.name ? S.matchNames(dict, q.name) : [];
   const langWord = [...q.langs].map((l) => LANGS[l]).join(" / ");
-  const label = [names.length ? names[0].e.hans || names[0].e.hant || names[0].e.ja || names[0].e.en : q.name, q.mega ? "Mega" + (q.megaXY ? " " + q.megaXY.toUpperCase() : "") : "",
-    q.suffix || "", q.set || "", q.promo ? "promo" : "", q.code || "", q.num != null ? "#" + q.num : "", langWord].filter(Boolean).join(" ");
+  const label = title || [names.length ? names[0].e.hans || names[0].e.hant || names[0].e.ja || names[0].e.en : q.name, q.mega ? "Mega" + (q.megaXY ? " " + q.megaXY.toUpperCase() : "") : "",
+    q.suffix || "", /^[a-z ]+$/i.test(q.rarityWord || "") ? q.rarityWord.toUpperCase() : q.rarityWord || "", q.set || "", q.promo ? "promo" : "", q.code || "", q.num != null ? "#" + q.num : "", langWord].filter(Boolean).join(" ");
   // 简中：PriceCharting
   if (q.langs.has("zh-cn") && q.langs.size === 1) {
     const list = [];
@@ -2882,7 +2897,7 @@ async function nameSearch(s) {
   // 繁中：日版卡换成繁中版本（没有繁中资料的沿用日版）
   if (q.langs.has("zh-tw") && !q.langs.has("ja")) cands = (await Promise.all(cands.map((c) => (c.lang === "ja" ? counterpart(c).catch(() => null) : c)))).filter(Boolean);
   const nm = names[0] && names[0].e;
-  showList(cands, `「${esc(label)}」${nm && nm.en && !/^[\x00-\x7f]+$/.test(q.name) ? `（${esc(nm.en)}）` : ""}：${cands.length >= 60 ? "最相关的 60" : cands.length} 张，新的在前。点你手上那张，或者加上版本 / 编号缩小范围（例：<code>${esc(q.name || "皮卡丘")} 日版 25</code>）`);
+  showList(cands, `「${esc(label)}」${nm && nm.en && !/^[\x00-\x7f]+$/.test(q.name) ? `（${esc(nm.en)}）` : ""}：${cands.length >= 60 ? "最相关的 60" : cands.length} 张，${q.rarity ? "这个稀有度的排在前面" : "新的在前"}。点你手上那张，或者加上版本 / 编号缩小范围（例：<code>${esc(q.name || "皮卡丘")} 日版 25</code>）`);
   return true;
 }
 
@@ -2894,17 +2909,18 @@ $("manualForm").onsubmit = async (e) => {
   $("manualIn").value = ""; $("manualIn").blur();
   if (scanning) { scanning = false; loopId++; setScanUI(stream ? "found" : "idle"); }
   setStatus("查找卡牌中…");
-  // 指向某一张卡的绰号先换掉（黄昏莉莉艾 → 397/SM-P）
-  let s2 = s;
-  try { const L = await searchLib(); s2 = L.S.aliasRewrite(L.dict, s); } catch {}
+  // 指向某几张卡的绰号先换掉（黄昏莉莉艾 → 397/SM-P；月伊 → 095/069 + 215/203）
+  let qs = [s];
+  try { const L = await searchLib(); qs = L.S.aliasRewrite(L.dict, s); } catch {}
+  const s2 = qs[0], aliased = qs.length > 1 || s2 !== s;
   // 「系列代码 + 编号」（SV8a 236 / PAF EN 232 / M1L 65）照原来的方法；其他（名字、promo、版本）用名字查卡
   const parsed = parseText(s2, true);
-  if (parsed.nums.length) {
+  if (parsed.nums.length && qs.length === 1) {
     const idx = await getIndex().catch(() => null);
     const isCode = (t) => idx && LANG_KEYS.some((l) => idx[l] && idx[l].map.has(t));
     if (parsed.tokens.some(isCode) || /^[\d\s\/]+$/.test(s2)) return void (await showResults(parsed, false));
   }
-  if (await nameSearch(s2)) return;
+  if (await nameSearch(qs, aliased ? s : null)) return;
   await showResults(parsed, false);
 };
 
