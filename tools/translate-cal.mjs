@@ -25,7 +25,9 @@ for (const src of [readJson("cal-cn.json", {}), readJson("cal-en.json", {}), srv
 const old = readJson("cal-tr.json", { items: {} });
 const out = { at: Date.now(), items: {} };
 const fields = (x) => ({ name: x.name || "", type: x.type || "", price: x.price || "", desc: x.desc || "", contents: x.contents || [] });
-const hash = (x) => crypto.createHash("sha1").update(JSON.stringify(fields(x))).digest("hex").slice(0, 12);
+// 翻译规则改了就把 RULES 加 1：所有商品会按新规则重翻一遍
+const RULES = 2;
+const hash = (x) => crypto.createHash("sha1").update(RULES + JSON.stringify(fields(x))).digest("hex").slice(0, 12);
 
 const SYSTEM = `You translate Pokémon Trading Card Game product announcements for a price-tracking app.
 Return ONLY a JSON object. For each requested target language code, give an object with exactly the same keys and shapes as the input
@@ -33,8 +35,13 @@ Return ONLY a JSON object. For each requested target language code, give an obje
 Rules:
 - Use each region's official Pokémon and Pokémon TCG terminology: Pokémon, trainer and set names as officially localized
   (e.g. ピカチュウ / 皮卡丘 / Pikachu, リザードン / 喷火龙 / Charizard, ナンジャモ / 奇树 / Iono, テラスタル / 太晶 / Tera).
-- Product types: 拡張パック / 补充包 / booster pack; 強化拡張パック / 强化扩充包 / enhanced expansion pack; ハイクラスパック / 高级扩充包 / high-class pack;
-  スペシャルセット / 特别组合 / special set; デッキ / 卡组 / deck; エリートトレーナーボックス / 精英训练家箱 / Elite Trainer Box; BOX / 盒 / box.
+- KEEP AS-IS, never translate: region-specific product names and abbreviations, rarity codes and rule names. For example:
+  ETB, Elite Trainer Box, Pokémon Center ETB, UPC, Ultra Premium Collection, SPC, Booster Bundle, Build & Battle Box/Stadium, Mini Tin,
+  Premium Collection, Booster Display, Sleeved Booster, Blister; SAR, SIR, AR, IR, SR, UR, HR, CHR, CSR, ACE SPEC, ex, EX, GX, V, VMAX, VSTAR, BREAK,
+  Tera, MEGA; and Japanese-only product types such as ハイクラスパック, スタートデッキ, スペシャルデッキセット, ジムセット when there is no matching product
+  in the target region (you may add a short explanation in parentheses after the original term, e.g. ETB（精英训练家箱）, ハイクラスパック（高级扩充包）).
+  Apply the same idea to any similar term that only exists in that region's product lineup.
+- Generic words are translated normally: 拡張パック / 补充包 / booster pack; デッキ / 卡组 / deck; BOX / 盒 / box.
 - If an English set or product name has no official translation, keep the original name and add a short translation in parentheses only when it helps.
 - Keep numbers, prices, currencies, dates and times exactly (translate only the surrounding words, e.g. 建议零售价 999元 → 希望小売価格 999元（人民元） / MSRP CN¥999).
 - Natural, concise wording. No notes, no explanations.`;
