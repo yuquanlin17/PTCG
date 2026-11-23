@@ -223,6 +223,9 @@ nav.bottom { position: fixed; left: 0; right: 0; bottom: 0; background: var(--su
 .cal-note { color: var(--muted); font-size: 12px; margin: 14px 2px; }
 .cal-sheet { position: relative; padding-top: 12px; }
 .cal-close { position: absolute; right: 12px; top: 12px; z-index: 2; background: rgba(0,0,0,.45); color: #fff; }
+.cal-tr { margin: 0 44px 10px 0; flex-wrap: wrap; }
+.cal-tr button { font-family: var(--font); font-size: 13px; padding: 5px 10px; }
+.cal-tr button:disabled { opacity: .4; }
 .cal-gallery { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 0 -4px 12px; padding: 0 4px; scrollbar-width: none; }
 .cal-gallery::-webkit-scrollbar { display: none; }
 .cal-gallery img { flex: none; width: 100%; max-height: 60vh; object-fit: contain; border-radius: 12px; background: #fff; scroll-snap-align: center; }
@@ -394,6 +397,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
 <div class="sheet-bg" id="calSheetBg" hidden>
   <div class="sheet cal-sheet" role="dialog" aria-modal="true" aria-labelledby="calName">
     <button class="sheet-close cal-close" id="calClose" aria-label="关闭">×</button>
+    <div class="seg cal-tr" id="calTr" role="group" aria-label="显示语言"></div>
     <div class="cal-gallery" id="calGallery"></div>
     <div class="name" id="calName"></div>
     <div class="cal-when"><span id="calDate"></span> <b class="cal-count" id="calCount"></b></div>
@@ -3327,7 +3331,8 @@ const calImg = (u) => u || ""; // 简中的图片存在网站自己的 cal-img/ 
 async function loadCalendar() {
   const base = proxyUrl();
   const site = (f) => fetch(f, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  const [srv, en, cn, msrp] = await Promise.all([base ? getJSON(`${base}?calendar=1`, "cal.srv", 3600e3).catch(() => null) : null, site("cal-en.json"), site("cal-cn.json"), site("cal-msrp.json")]);
+  const [srv, en, cn, msrp, tr] = await Promise.all([base ? getJSON(`${base}?calendar=1`, "cal.srv", 3600e3).catch(() => null) : null, site("cal-en.json"), site("cal-cn.json"), site("cal-msrp.json"), site("cal-tr.json")]);
+  calTr = (tr && tr.items) || {};
   // 同一件商品出现在两份里时，取资料较全的（有日期 > 有图 > 较新）
   const rank = (x) => (x.date ? 4 : 0) + (x.img ? 2 : 0);
   const byId = new Map();
@@ -3414,19 +3419,42 @@ function tickCalendar() {
   const byId = new Map(calItems.map((x) => [x.id, x]));
   document.querySelectorAll("[data-cal]").forEach((e) => { const x = byId.get(e.dataset.cal); if (!x) return; const cd = calCountdown(x); e.textContent = cd.text; e.className = `cal-count ${cd.cls}`; });
 }
+// 翻译：GitHub 每天提前翻好（tools/translate-cal.mjs → cal-tr.json），这里只是切换显示。默认原文
+let calTr = {};
+const CAL_TR_LANGS = { zh: "中文", ja: "日本語", en: "English" };
+const calSrcLang = (x) => (x.region === "ja" ? "ja" : x.region === "en" ? "en" : "zh");
+function calTrRow(x, cur) {
+  const row = $("calTr"), t = calTr[x.id] || {}, src = calSrcLang(x);
+  const opts = [["orig", `原文（${{ zh: "中文", ja: "日文", en: "英文" }[src]}）`], ...Object.entries(CAL_TR_LANGS).filter(([k]) => k !== src)];
+  row.innerHTML = "";
+  for (const [k, label] of opts) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.setAttribute("aria-pressed", String(k === cur));
+    if (k !== "orig" && !t[k]) { b.disabled = true; b.title = "还没翻译（每天自动翻一次）"; }
+    b.onclick = () => calFill(x, k);
+    row.appendChild(b);
+  }
+}
+function calFill(x, lang = "orig") {
+  const t = lang === "orig" ? null : (calTr[x.id] || {})[lang];
+  const f = t || x;
+  $("calName").innerHTML = `<span class="lang-pill" data-l="${x.region}">${LANGS[x.region]}</span> ${esc(f.name || x.name)}`;
+  $("calDate").textContent = [calDateText(x), f.type || ""].filter(Boolean).join(" · ");
+  // 美版建议零售价是网页自己按价格表填的，不用翻译；其他用翻译过的
+  const price = x.priceSrc ? x.price : (t && t.price) || x.price;
+  $("calPrice").innerHTML = [price ? esc(price) + (x.priceSrc ? ` <small style="font-weight:400;color:var(--muted)">（来源：${esc(x.priceSrc)}）</small>` : "") : "",
+    x.market ? `<small style="font-weight:400;color:var(--muted)">TCGplayer 预售市价 ${esc(x.market)}（有溢价，不是官方价）</small>` : ""].filter(Boolean).join("<br>");
+  $("calDesc").textContent = f.desc || (x.region === "zh-cn" && !t ? "简中官网的商品介绍写在图片里，左右滑动看图。" : "");
+  $("calContents").innerHTML = (f.contents || []).map((s) => `<li>${esc(s)}</li>`).join("");
+  calTrRow(x, lang);
+}
 function openCalItem(x) {
   const g = $("calGallery"); g.innerHTML = "";
   const pics = [x.img, ...(x.imgs || [])].filter(Boolean).map(calImg).filter((u, i, a) => a.indexOf(u) === i);
   g.classList.toggle("multi", pics.length > 1);
   for (const u of pics) { const im = document.createElement("img"); im.alt = ""; im.src = u; im.onerror = () => im.remove(); g.appendChild(im); }
-  $("calName").innerHTML = `<span class="lang-pill" data-l="${x.region}">${LANGS[x.region]}</span> ${esc(x.name)}`;
-  $("calDate").textContent = [calDateText(x), x.type].filter(Boolean).join(" · ");
+  calFill(x, "orig");
   const cd = calCountdown(x); $("calCount").textContent = cd.text; $("calCount").className = `cal-count ${cd.cls}`; $("calCount").dataset.cal = x.id;
-  // 官方 / 建议零售价（日版、简中官网有写；美版按价格表）；TCGplayer 的预售市场价通常有溢价，单独一行注明
-  $("calPrice").innerHTML = [x.price ? esc(x.price) + (x.priceSrc ? ` <small style="font-weight:400;color:var(--muted)">（来源：${esc(x.priceSrc)}）</small>` : "") : "",
-    x.market ? `<small style="font-weight:400;color:var(--muted)">TCGplayer 预售市价 ${esc(x.market)}（有溢价，不是官方价）</small>` : ""].filter(Boolean).join("<br>");
-  $("calDesc").textContent = x.desc || (x.region === "zh-cn" ? "简中官网的商品介绍写在图片里，左右滑动看图。" : "");
-  $("calContents").innerHTML = (x.contents || []).map((s) => `<li>${esc(s)}</li>`).join("");
   $("calLink").href = x.link; $("calLink").textContent = `查看来源：${x.from || "官网"}`;
   $("calSheetBg").hidden = false;
 }
