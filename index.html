@@ -85,12 +85,13 @@ header.top h1 .ver { display: block; font-size: 11px; font-weight: 500; color: v
 .guide.scanning { animation: glow 1.6s ease-in-out infinite; }
 @keyframes glow { 50% { border-color: var(--accent); box-shadow: 0 0 0 2000px var(--shade), 0 0 18px 2px color-mix(in srgb, var(--accent) 60%, transparent); } }
 /* 认出卡：框住卡片（追踪中黄色，认出来绿色 + 滴一声） */
-.lock { position: absolute; border: 3px solid var(--accent); border-radius: 10px; pointer-events: none; z-index: 2;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 14px color-mix(in srgb, var(--accent) 70%, transparent); transition: left .12s, top .12s, width .12s, height .12s; }
-.lock.hit { border-color: #3cc47c; box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 22px 3px rgba(60,196,124,.85); animation: lockpop .35s ease-out; }
-.lock.hit::after { content: "✓"; position: absolute; right: -12px; top: -12px; width: 26px; height: 26px; border-radius: 50%; background: #3cc47c; color: #fff;
-  font: 700 16px/26px var(--font); text-align: center; }
-@keyframes lockpop { 0% { transform: scale(1.08); opacity: .4; } 100% { transform: scale(1); opacity: 1; } }
+.lock { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+.lock polygon { fill: color-mix(in srgb, var(--accent) 10%, transparent); stroke: var(--accent); stroke-width: 3; stroke-linejoin: round;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 80%, transparent)); transition: all .12s linear; }
+.lock.hit polygon { fill: rgba(60,196,124,.12); stroke: #3cc47c; filter: drop-shadow(0 0 8px rgba(60,196,124,.9)); animation: lockpop .35s ease-out; transform-origin: center; transform-box: fill-box; }
+.lock .ok { display: none; } .lock.hit .ok { display: block; }
+.lock .ok circle { fill: #3cc47c; } .lock .ok path { fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes lockpop { 0% { transform: scale(1.06); opacity: .4; } 100% { transform: scale(1); opacity: 1; } }
 .viewfinder img.preview.frozen { object-fit: cover; }
 .vf-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #cfd3dd; text-align: center; padding: 20px; font-size: 14px; }
 .vf-empty small { font-size: 12px; opacity: .75; }
@@ -299,7 +300,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
       <video id="video" playsinline muted hidden></video>
       <img id="preview" class="preview" alt="" hidden>
       <div class="guide" id="guide" hidden></div>
-      <div class="lock" id="lock" hidden></div>
+      <svg class="lock" id="lock" hidden><polygon points=""></polygon><g class="ok"><circle r="13"></circle><path d="M-6 0 l4 4 l8 -8"></path></g></svg>
       <div class="vf-empty" id="vfEmpty">
         <div>点「开始扫描」，把卡放进框里就会自动识别</div>
         <small>日版 · 美版 · 简中 · 繁中 自动判断</small>
@@ -554,7 +555,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "11.23 · 名字查卡 + 居中检测";
+const APP_VERSION = "11.24 · 真正框住卡片";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -1639,6 +1640,9 @@ function renderCard(c, choosable) {
       $("results").querySelectorAll(".card, [data-retry]").forEach((x) => x !== el && x.remove());
       setStatus(`已选定 <b>${LANGS[c.lang]}</b>`);
       b.remove(); autoSave(c, el); offerSwitch(c, el);
+      if (c._vers && c._vers.length > 1 && !el.querySelector(".versions")) versionRow(el, c, c.tpId, c._vers);
+      // 刚扫的卡：看卡面文字核对语言（选成美版但其实是日版时自动改）
+      if (lastCardShot && c._vers) langCheck(lastCardShot.c, lastCardShot.g);
     };
     el.querySelector("[data-act]").appendChild(b);
   }
@@ -1815,7 +1819,7 @@ async function startScan(opts = {}) {
   if (!hasLiveCam) { $("shootIn").click(); return; }
   unlockAudio(); // 声音要在点按钮的时候准备好（浏览器规定）
   if (!stream && !(await openCam())) return;
-  $("preview").hidden = true; $("preview").classList.remove("frozen"); lockInset = 0; showLock(0, "off");
+  $("preview").hidden = true; $("preview").classList.remove("frozen"); lockInset = 0; showLock(0, "off"); resetTrack(); lastCardShot = null;
   $("results").innerHTML = "";
   scanning = true; setScanUI("scanning");
   const my = ++loopId;
@@ -1878,14 +1882,22 @@ async function startScan(opts = {}) {
       // 要你选的时候：先存几帧画面再关相机，候选马上列出来，后台接着读卡底，读出来自动选好
       const shots = await snapFrames(pick.sure ? 1 : 3);
       const hints = recent.slice();
+      // 拿不准（要你选 / 在猜）：和最像的几张分别对齐，对得上的那张拉正了再认一次，常常就确定了
+      if (shots.length && !pick.sure) {
+        $("visPeek").hidden = false; $("visPeek").textContent = "正在核对是哪张卡…";
+        const v2 = await verifyByAlign(r, shots[0].c, hints).catch(() => null);
+        if (v2) { r = v2.r; pick = v2.pick; }
+      }
+      // 还没找到卡的四个角（比如第一帧就认出来了）：在存下的画面上对齐一次，绿框才框得准
+      if (shots.length && !track.quad) await trackCard((pick.list[0] || r.best).p, shots[0].c, true);
       await visShow(r, true, hints, pick, pick.sure ? null : () => startScan({ noGuess: true }));
       finishScan();
       if (shots.length > 1 && r.shown && r.shown.length > 1) bgResolve(shots, r.shown, hints);
-      // 只显示了一张：后台看卡面文字核对语言（日版 / 繁中 / 简中 / 美版同图时）
-      else if (shots.length && r.shown && r.shown.length === 1) {
-        const { c, g } = shots[0], i = r.inset || 0;
-        langCheck(c, { gx: g.gx + g.gw * i, gy: g.gy + g.gh * i, gw: g.gw * (1 - 2 * i), gh: g.gh * (1 - 2 * i) });
-      }
+      // 后台看卡面文字核对语言（日版 / 繁中 / 简中 / 美版同图时）；找到了四个角就用拉正的高清卡图读
+      if (shots.length) lastCardShot = track.quad ? { c: vis.quadCanvas(shots[0].c, track.quad, 630, 880), g: { gx: 0, gy: 0, gw: 630, gh: 880 } }
+        : (() => { const { c, g } = shots[0], i = r.inset || 0; return { c, g: { gx: g.gx + g.gw * i, gy: g.gy + g.gh * i, gw: g.gw * (1 - 2 * i), gh: g.gh * (1 - 2 * i) } }; })();
+      if (lastCardShot && r.shown && r.shown.length === 1) langCheck(lastCardShot.c, lastCardShot.g);
+      else if (lastCardShot && r.shown && r.shown.length > 1 && !pick.guess) langPick(r.shown, lastCardShot);
     };
     while (scanning && my === loopId) {
       if (fam) {
@@ -1905,8 +1917,17 @@ async function startScan(opts = {}) {
       } catch {}
       if (!scanning || my !== loopId) return;
       if (!r) { await sleep(200); continue; }
-      // 画面里像是有张卡：黄框框住它（框的大小跟着最像的那种裁法）
-      if (r.best.sim >= 0.6) { lockInset = r.inset || 0; showLock(lockInset, "track"); } else showLock(0, "off");
+      // 画面里像是有张卡：找出它真正的四个角（有显卡加速时每隔一会儿做一次），框住它；
+      // 再把卡「拉正」比对一次，比引导框裁出来的更准（日版 / 美版同图时也更分得清）
+      if (r.best.sim >= 0.58) {
+        if (gpu && Date.now() - track.at > 250) await trackCard(r.best.p);
+        if (!scanning || my !== loopId) return;
+        if (track.quad) {
+          showLockQuad(track.quad, "track");
+          try { const rq = await visDecide(vis.quadCanvas($("video"), track.quad)); rq.quad = track.quad; if (rq.best.sim > r.best.sim) r = rq; } catch {}
+        } else showLock(0, "off");
+        lockInset = r.inset || 0;
+      } else { showLock(0, "off"); if (track.miss++ > 3) resetTrack(); }
       firstAt = firstAt || Date.now();
       const zhcn = recent.some((p) => p.tokens.some((t) => ZH_CODE.test(t)));
       // 1.5 秒内两次认出同一张卡图才算（中间夹着没认出的帧也没关系），一次就非常确定的直接算
@@ -2142,7 +2163,7 @@ async function startScan(opts = {}) {
 }
 // 认出来了：关掉相机，让手机歇一歇；点「扫下一张」再打开
 // 认出来：定格画面、绿框框住卡、滴一声（静音模式下 iPhone 不出声）、能震动的手机震一下
-let lockInset = 0, actx = null;
+let lockInset = 0, actx = null, lastCardShot = null;
 function unlockAudio() {
   try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume(); } catch {}
 }
@@ -2155,14 +2176,91 @@ function beep() {
     o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.13);
   } catch {}
 }
-function showLock(inset, state) {
-  const el = $("lock"), vf = $("vf"), g = $("guide");
-  if (state === "off" || g.hidden) { el.hidden = true; return; }
-  const box = vf.getBoundingClientRect(), gb = g.getBoundingClientRect();
-  Object.assign(el.style, { left: gb.left - box.left + gb.width * inset + "px", top: gb.top - box.top + gb.height * inset + "px",
-    width: gb.width * (1 - 2 * inset) + "px", height: gb.height * (1 - 2 * inset) + "px" });
+// 框：画在卡片真正的四个角上（视频像素坐标 → 画面上的位置；视频是 object-fit: cover）
+function showLockQuad(q, state) {
+  const el = $("lock"), v = $("video"), vf = $("vf");
+  // 注意：SVG 元素没有 .hidden 属性，要直接改 hidden 这个 attribute
+  if (state === "off" || !q || !v.videoWidth) { el.setAttribute("hidden", ""); return; }
+  const box = vf.getBoundingClientRect(), vw = v.videoWidth, vh = v.videoHeight;
+  const sc = Math.max(box.width / vw, box.height / vh), ox = (vw * sc - box.width) / 2, oy = (vh * sc - box.height) / 2;
+  const pts = q.map(([x, y]) => [x * sc - ox, y * sc - oy]);
+  el.querySelector("polygon").setAttribute("points", pts.map((p) => p.map((n) => n.toFixed(1)).join(",")).join(" "));
+  // 打勾的小圆点放在右上角
+  el.querySelector(".ok").setAttribute("transform", `translate(${pts[1][0].toFixed(1)},${pts[1][1].toFixed(1)})`);
   el.classList.toggle("hit", state === "hit");
-  el.hidden = false;
+  el.removeAttribute("hidden");
+}
+// 没找到卡的四个角时（还没对齐），用引导框（往里缩 inset）当框
+function guideQuad(inset = 0) {
+  const g = guideGeom(); if (!g) return null;
+  const x0 = g.gx + g.gw * inset, y0 = g.gy + g.gh * inset, x1 = g.gx + g.gw * (1 - inset), y1 = g.gy + g.gh * (1 - inset);
+  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+}
+const showLock = (inset, state) => showLockQuad(state === "off" ? null : guideQuad(inset), state);
+// ---------- 追踪卡片：把画面和最像的那张卡的卡图一块一块对上，算出卡在画面里的四个角（vis.alignCard） ----------
+const track = { id: null, quad: null, busy: false, at: 0, miss: 0 };
+const refImgs = new Map();
+function refImage(id) {
+  if (!refImgs.has(id)) refImgs.set(id, (async () => {
+    for (const u of [`https://tcgplayer-cdn.tcgplayer.com/product/${id}_200w.jpg`, `https://tcgplayer-cdn.tcgplayer.com/product/${id}_in_400x400.jpg`]) {
+      try { return await new Promise((ok, no) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => ok(i); i.onerror = no; i.src = u; }); } catch {}
+    }
+    throw new Error("no ref image");
+  })().catch((e) => { refImgs.delete(id); throw e; }));
+  return refImgs.get(id);
+}
+// src：视频或存下的帧（和视频同样大小）。返回 true = 找到了四个角（track.quad）
+async function trackCard(p, src = $("video"), force = false) {
+  if (!vis || !p || (track.busy && !force)) return !!track.quad;
+  track.busy = true;
+  try {
+    const g = guideGeom(); if (!g) return false;
+    const rf = await vis.refFeats(p.id, await refImage(p.id));
+    const cx = g.gx + g.gw / 2, cy = g.gy + g.gh / 2, side = g.gh * 1.2;
+    const a = await vis.alignCard(vis.frameSquare(src, cx, cy, side), rf);
+    if (a) {
+      const q = a.quad.map(([x, y]) => [cx - side / 2 + (x * side) / 256, cy - side / 2 + (y * side) / 256]);
+      // 同一张卡：和上一次的位置平滑一下，框不会抖
+      track.quad = track.id === p.id && track.quad ? q.map((pt, i) => [pt[0] * 0.6 + track.quad[i][0] * 0.4, pt[1] * 0.6 + track.quad[i][1] * 0.4]) : q;
+      track.id = p.id; track.miss = 0;
+    } else if (++track.miss >= 2) { track.quad = null; track.id = null; }
+  } catch { /* 卡图下载不了：照旧用引导框 */ }
+  finally { track.busy = false; track.at = Date.now(); }
+  return !!track.quad;
+}
+const resetTrack = () => { track.id = null; track.quad = null; track.miss = 0; };
+// 拿不准是哪张时：把画面和最像的几张（不同的卡）分别对齐，对得上的才是真的（认错的卡对不上几块）。
+// 对上了就把卡拉正再比对一次。返回新的比对结果，或者 null（都对不上）
+async function verifyByAlign(r, src, hints) {
+  const g = guideGeom(); if (!g || !vis) return null;
+  const cx = g.gx + g.gw / 2, cy = g.gy + g.gh / 2, side = g.gh * 1.2;
+  let ff;
+  try { ff = await vis.squareFeats(vis.frameSquare(src, cx, cy, side)); } catch { return null; }
+  const seen = new Set(), cands = [];
+  for (const t of r.top) { const k = baseName(t.p.name); if (seen.has(k)) continue; seen.add(k); cands.push(t.p); if (cands.length >= 5) break; }
+  let best = null, second = 0;
+  for (const p of cands) {
+    try {
+      const a = await vis.alignCard(ff, await vis.refFeats(p.id, await refImage(p.id)));
+      const n = a ? a.inliers : 0;
+      if (window.__alignLog) console.log("align", p.name, p.id, n);
+      if (!best || n > best.n) { second = best ? best.n : 0; best = { p, a, n }; } else if (n > second) second = n;
+    } catch {}
+  }
+  if (!best || !best.a || best.n < Math.max(15, second * 1.2)) return null; // 认错的卡也会碰巧对上十来块
+  track.quad = best.a.quad.map(([x, y]) => [cx - side / 2 + (x * side) / 256, cy - side / 2 + (y * side) / 256]);
+  track.id = best.p.id; track.miss = 0;
+  const r2 = await visDecide(vis.quadCanvas(src, track.quad));
+  r2.quad = track.quad;
+  if (window.__alignLog) console.log("align result", best.p.name, best.n, second, "→", r2.best.p.name, r2.best.sim.toFixed(3), "vs", r.best.sim.toFixed(3));
+  // 拉正以后最像的就是对得上的那张（或者它的其他版本）：用拉正后的结果
+  if (baseName(r2.best.p.name) === baseName(best.p.name)) return { r: r2, pick: visPick(r2, hints) };
+  // 拉正的图不够清楚（反光、模糊）：相信对齐的结果，只列这张卡的几个版本（日版 / 美版 / 复刻…）
+  const bn = baseName(best.p.name), fam = r.top.filter((t) => baseName(t.p.name) === bn);
+  if (!fam.length) return null;
+  const r3 = { ...r, best: fam[0], family: fam, key: bn, ok: true };
+  const pk = visPick(r3, hints);
+  return { r: r3, pick: pk.list.length ? pk : { list: fam.slice(0, 4), sure: fam.length === 1 } };
 }
 function freezeFrame() {
   const v = $("video");
@@ -2176,7 +2274,7 @@ function freezeFrame() {
 }
 function finishScan() {
   scanning = false; loopId++;
-  if (freezeFrame()) { showLock(lockInset, "hit"); beep(); try { navigator.vibrate && navigator.vibrate(40); } catch {} }
+  if (freezeFrame()) { showLockQuad(track.quad || guideQuad(lockInset), "hit"); beep(); try { navigator.vibrate && navigator.vibrate(40); } catch {} }
   closeCam(); setScanUI("found");
   $("ocrPeek").hidden = true; $("visPeek").hidden = true;
 }
@@ -2475,6 +2573,11 @@ async function visShow(r, auto, hints = [], pick = visPick(r, hints), retry = nu
   if (tw) list = await Promise.all(list.map(async (c) => (c.lang === "ja" ? (await counterpart(c).catch(() => null)) || c : c)));
   const c = list[0];
   if (list.length > 1) list.forEach((x, i) => { x._first = list[0]; if (i === 0) x._sim = pick.list[0].sim; });
+  // 几张让你选时：每张都记下同名的其他版本（日版 / 美版 / 复刻…），选了以后放「其他版本」按钮，选错语言还能改
+  if (list.length > 1) list.forEach((x) => {
+    const seen = new Set(), bn = baseName(x.enName || x.name);
+    x._vers = r.top.filter((t) => baseName(t.p.name) === bn && !seen.has(t.p.id) && seen.add(t.p.id)).slice(0, 6);
+  });
   // 特典卡编号不是纯数字（SWSH050），取里面的数字显示
   const n = parseInt(c.localId, 10) || parseInt(String(c.localId).replace(/\D/g, ""), 10) || 1;
   const res = await showResults({ nums: [{ n, total: c.official }], tokens: [], twPrev: [], raw: "" }, auto, list);
@@ -2550,6 +2653,25 @@ async function langCheck(src, g) {
   if (want === "ja" && curLang !== "zh-tw" && press(btn(/^日版/), "卡面是日文，已改为日版")) return;
   // 没有现成的版本可换：提示一下
   $("status").insertAdjacentHTML("beforeend", ` · <b>注意：卡面文字看起来是${LANGS[want] || want}</b>，如果不对可以在上面输入框按名字 + 版本查（例：「${esc(el.querySelector(".name").textContent.replace(/^\S+/, "").slice(0, 12))} ${LANGS[want]}」）`);
+}
+
+// 列出了同一张卡的几个版本、只是语言不同（日版 / 美版）：看卡面文字是哪种语言，只有一个版本对得上就帮你选好
+async function langPick(list, shot) {
+  if (!shot || !list || list.length < 2) return;
+  const langs = new Set(list.map((c) => c.lang));
+  if (langs.size < 2) return;
+  const token = bgToken;
+  let sc;
+  try { const crop = cardTextCrop(shot.c, shot.g); if (!crop) return; sc = await detectScript(crop); } catch { return; }
+  if (token !== bgToken || !sc.lang || sc.lang === "zh") return;
+  const want = sc.lang === "zh-tw" || sc.lang === "zh-cn" ? "ja" : sc.lang; // 繁中 / 简中卡和日版同图：先选日版，选了以后语言核对会再改
+  const els = [...$("results").querySelectorAll(":scope > .card")];
+  const hit = list.map((c, i) => ({ c, el: els[i] })).filter((x) => x.c.lang === want && x.el);
+  if (!hit.length) return;
+  const b = hit[0].el.querySelector("[data-pick]");
+  if (!b) return;
+  b.click();
+  setTimeout(() => $("status").insertAdjacentHTML("beforeend", ` · 卡面是${{ ja: "日文", en: "英文" }[want]}，已选${LANGS[want]}`), 50);
 }
 
 // 相机：取引导框里的卡片（交替用框本身和稍微往里缩一点，卡比框小一点也对得上）
@@ -2642,6 +2764,7 @@ async function scanFromImage(img, quiet, opts = {}) {
     if (!opts.skipVis && r && !zhcn && (r.ok || r.best.sim >= 0.6)) {
       const res = await visShow(r, false, p ? [p] : [], r.ok ? undefined : visGuess(r), retry);
       // 列出了几张：后台接着在照片上多读几种卡底处理方式，读出来自动选好
+      lastCardShot = { c: img, g: r.geom };
       if (r.shown && r.shown.length > 1) bgResolve([{ c: img, g: r.geom }], r.shown, p ? [p] : []);
       else if (r.shown && r.shown.length === 1) langCheck(img, r.geom);
       return res;
