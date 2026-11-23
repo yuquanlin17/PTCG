@@ -1870,11 +1870,16 @@ async function startScan(opts = {}) {
     const accept = async (r, pick) => {
       loopId++; // 先停住读字的循环
       // 要你选的时候：先存几帧画面再关相机，候选马上列出来，后台接着读卡底，读出来自动选好
-      const shots = pick.sure ? [] : await snapFrames();
+      const shots = await snapFrames(pick.sure ? 1 : 3);
       const hints = recent.slice();
       await visShow(r, true, hints, pick, pick.sure ? null : () => startScan({ noGuess: true }));
       finishScan();
-      if (shots.length && r.shown && r.shown.length > 1) bgResolve(shots, r.shown, hints);
+      if (shots.length > 1 && r.shown && r.shown.length > 1) bgResolve(shots, r.shown, hints);
+      // 只显示了一张：后台看卡面文字核对语言（日版 / 繁中 / 简中 / 美版同图时）
+      else if (shots.length && r.shown && r.shown.length === 1) {
+        const { c, g } = shots[0], i = r.inset || 0;
+        langCheck(c, { gx: g.gx + g.gw * i, gy: g.gy + g.gh * i, gw: g.gw * (1 - 2 * i), gh: g.gh * (1 - 2 * i) });
+      }
     };
     while (scanning && my === loopId) {
       if (fam) {
@@ -2489,6 +2494,58 @@ async function visShow(r, auto, hints = [], pick = visPick(r, hints), retry = nu
   r.shown = list; // 列出来的卡，后台读卡底时用
   return res;
 }
+// ---------- 语言核对：卡图日版 / 繁中 / 简中常常一模一样，看卡面上的招式说明是什么文字 ----------
+// 有假名 → 日版；全是汉字 → 中文（再比简体、繁体字库谁读得更顺）；英文单词 → 美版。和显示的不一样就自动换（附说明）
+let simWorker = null;
+function getSimWorker() {
+  if (!simWorker) simWorker = Tesseract.createWorker("chi_sim", 1, {}).then(async (w) => { await w.setParameters({ tessedit_pageseg_mode: "6" }); return w; })
+    .catch((e) => { simWorker = null; throw e; });
+  return simWorker;
+}
+// 卡片中下部（招式说明）那一块，放大成适合读字的大小
+function cardTextCrop(src, g) {
+  return prep(src, g.gx + g.gw * 0.06, g.gy + g.gh * 0.5, g.gw * 0.88, g.gh * 0.32, { target: 1100 });
+}
+// 实测（手机照片上的招式说明）：美版 → 英文字库读出很多单词；简中 → 简体字库比「日文 + 繁体」字库有把握得多；
+// 日版 → 假名占一半以上，简体字库反而更没把握；繁中 → 几乎没有假名，「日文 + 繁体」字库比简体有把握。拿不准时不动
+async function detectScript(crop) {
+  const e = (await (await getWorker()).recognize(crop)).data;
+  const words = (String(e.text).match(/[A-Za-z]{4,}/g) || []).length;
+  if (words >= 8 && (e.confidence || 0) >= 35) return { lang: "en", words, engConf: e.confidence };
+  const w = await getNameWorker();
+  await w.setParameters({ tessedit_pageseg_mode: "6" });
+  const r = (await w.recognize(crop)).data, t = r.text || "", jaConf = r.confidence || 0;
+  const kana = (t.match(/[\u3041-\u30ff]/g) || []).length, han = (t.match(/[\u4e00-\u9fff]/g) || []).length, kr = kana / Math.max(1, kana + han);
+  if (kr >= 0.5 && kana >= 12) return { lang: "ja", kana, han };
+  let simConf = 0;
+  try { simConf = (await (await getSimWorker()).recognize(crop)).data.confidence || 0; } catch { return { lang: null }; }
+  if (simConf >= jaConf + 8) return { lang: "zh-cn", simConf, jaConf, kana, han };
+  if (kr < 0.25 && han >= 15 && jaConf >= simConf + 3) return { lang: "zh-tw", simConf, jaConf, kana, han };
+  if (kr >= 0.4 && kana >= 12 && jaConf >= simConf) return { lang: "ja", kana, han };
+  return { lang: null, simConf, jaConf, kana, han };
+}
+// 结果只显示了一张（自动认定）时，在后台核对语言；src + g：卡片在画面 / 照片里的位置
+async function langCheck(src, g) {
+  const el = $("results").querySelector(":scope > .card");
+  if (!el || !src || !g) return;
+  const token = bgToken;
+  let s;
+  try { const crop = cardTextCrop(src, g); if (!crop) return; s = await detectScript(crop); } catch { return; }
+  if (token !== bgToken || !s.lang || !el.isConnected) return; // 你已经点了别的 / 开始扫下一张
+  const cur = el.querySelector(".lang-pill");
+  const curLang = cur && cur.dataset.l;
+  const want = s.lang === "zh" ? null : s.lang;
+  if (!want || want === curLang || (want === "zh-tw" && curLang === "zh-tw")) return;
+  const btn = (re) => [...el.querySelectorAll("button")].find((b) => re.test(b.textContent));
+  const press = (b, why) => { if (!b) return false; b.click(); setTimeout(() => $("status").insertAdjacentHTML("beforeend", ` · ${why}`), 50); return true; };
+  if (want === "zh-tw" && press(btn(/其实是繁中/), "卡面是繁体中文，已改为繁中")) return;
+  if (want === "zh-cn" && press(btn(/其实是简中/), "卡面是简体中文，已改为简中")) return;
+  if (want === "en" && press(btn(/^美版/), "卡面是英文，已改为美版")) return;
+  if (want === "ja" && curLang !== "zh-tw" && press(btn(/^日版/), "卡面是日文，已改为日版")) return;
+  // 没有现成的版本可换：提示一下
+  $("status").insertAdjacentHTML("beforeend", ` · <b>注意：卡面文字看起来是${LANGS[want] || want}</b>，如果不对可以在上面输入框按名字 + 版本查（例：「${esc(el.querySelector(".name").textContent.replace(/^\S+/, "").slice(0, 12))} ${LANGS[want]}」）`);
+}
+
 // 相机：取引导框里的卡片（交替用框本身和稍微往里缩一点，卡比框小一点也对得上）
 function liveCardCanvas(inset) {
   const v = $("video"), vf = $("vf"), g = $("guide");
@@ -2580,6 +2637,7 @@ async function scanFromImage(img, quiet, opts = {}) {
       const res = await visShow(r, false, p ? [p] : [], r.ok ? undefined : visGuess(r), retry);
       // 列出了几张：后台接着在照片上多读几种卡底处理方式，读出来自动选好
       if (r.shown && r.shown.length > 1) bgResolve([{ c: img, g: r.geom }], r.shown, p ? [p] : []);
+      else if (r.shown && r.shown.length === 1) langCheck(img, r.geom);
       return res;
     }
   }
