@@ -82,6 +82,14 @@ header.top h1 .ver { display: block; font-size: 11px; font-weight: 500; color: v
   background: rgba(0,0,0,.55); color: #fff; font-size: 12px; padding: 3px 10px; border-radius: 999px; }
 .guide.scanning { animation: glow 1.6s ease-in-out infinite; }
 @keyframes glow { 50% { border-color: var(--accent); box-shadow: 0 0 0 2000px var(--shade), 0 0 18px 2px color-mix(in srgb, var(--accent) 60%, transparent); } }
+/* 认出卡：框住卡片（追踪中黄色，认出来绿色 + 滴一声） */
+.lock { position: absolute; border: 3px solid var(--accent); border-radius: 10px; pointer-events: none; z-index: 2;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 14px color-mix(in srgb, var(--accent) 70%, transparent); transition: left .12s, top .12s, width .12s, height .12s; }
+.lock.hit { border-color: #3cc47c; box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 22px 3px rgba(60,196,124,.85); animation: lockpop .35s ease-out; }
+.lock.hit::after { content: "✓"; position: absolute; right: -12px; top: -12px; width: 26px; height: 26px; border-radius: 50%; background: #3cc47c; color: #fff;
+  font: 700 16px/26px var(--font); text-align: center; }
+@keyframes lockpop { 0% { transform: scale(1.08); opacity: .4; } 100% { transform: scale(1); opacity: 1; } }
+.viewfinder img.preview.frozen { object-fit: cover; }
 .vf-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #cfd3dd; text-align: center; padding: 20px; font-size: 14px; }
 .vf-empty small { font-size: 12px; opacity: .75; }
 
@@ -286,6 +294,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
       <video id="video" playsinline muted hidden></video>
       <img id="preview" class="preview" alt="" hidden>
       <div class="guide" id="guide" hidden></div>
+      <div class="lock" id="lock" hidden></div>
       <div class="vf-empty" id="vfEmpty">
         <div>点「开始扫描」，把卡放进框里就会自动识别</div>
         <small>日版 · 美版 · 简中 · 繁中 自动判断</small>
@@ -294,7 +303,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
 
     <button class="scanbtn" id="scanBtn">开始扫描</button>
     <form class="manual" id="manualForm">
-      <input id="manualIn" type="search" enterkeyhint="search" placeholder="或者直接输入：M3 110 / SV5a 59 / PAF 232" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="输入系列代码和编号查询">
+      <input id="manualIn" type="search" enterkeyhint="search" placeholder="输入名字或编号：裂空座 日版 / SV8a 236 / 085 promo" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="输入卡名、系列代码和编号查询">
       <button class="btn" type="submit">查询</button>
     </form>
     <div class="linkrow">
@@ -354,6 +363,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
       <input id="thresholdIn" type="number" min="0" step="0.5" inputmode="decimal">
       <span>USD 的卡扫描后自动加入收藏</span>
     </div>
+    <label class="settings"><input type="checkbox" id="beepIn"> 认出卡时「滴」一声</label>
     <div class="settings" id="fxLine"></div>
     <form class="settings" id="proxyForm" hidden>
       <label for="proxyIn">价格服务器</label>
@@ -1796,8 +1806,9 @@ function stripFrom(src, { gx, gy, gw, gh }, variant) {
 async function startScan(opts = {}) {
   cancelBg();
   if (!hasLiveCam) { $("shootIn").click(); return; }
+  unlockAudio(); // 声音要在点按钮的时候准备好（浏览器规定）
   if (!stream && !(await openCam())) return;
-  $("preview").hidden = true;
+  $("preview").hidden = true; $("preview").classList.remove("frozen"); lockInset = 0; showLock(0, "off");
   $("results").innerHTML = "";
   scanning = true; setScanUI("scanning");
   const my = ++loopId;
@@ -1876,11 +1887,14 @@ async function startScan(opts = {}) {
         k++;
         for (const inset of insets) {
           const c = liveCardCanvas(inset), x = c && (await visDecide(c));
+          if (x) x.inset = inset;
           if (x && (!r || x.best.sim > r.best.sim)) r = x;
         }
       } catch {}
       if (!scanning || my !== loopId) return;
       if (!r) { await sleep(200); continue; }
+      // 画面里像是有张卡：黄框框住它（框的大小跟着最像的那种裁法）
+      if (r.best.sim >= 0.6) { lockInset = r.inset || 0; showLock(lockInset, "track"); } else showLock(0, "off");
       firstAt = firstAt || Date.now();
       const zhcn = recent.some((p) => p.tokens.some((t) => ZH_CODE.test(t)));
       // 1.5 秒内两次认出同一张卡图才算（中间夹着没认出的帧也没关系），一次就非常确定的直接算
@@ -2115,12 +2129,46 @@ async function startScan(opts = {}) {
   }
 }
 // 认出来了：关掉相机，让手机歇一歇；点「扫下一张」再打开
+// 认出来：定格画面、绿框框住卡、滴一声（静音模式下 iPhone 不出声）、能震动的手机震一下
+let lockInset = 0, actx = null;
+function unlockAudio() {
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume(); } catch {}
+}
+function beep() {
+  if (!store.get("ptcg.beep", 1) || !actx) return;
+  try {
+    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+    o.type = "sine"; o.frequency.setValueAtTime(1760, t);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.13);
+  } catch {}
+}
+function showLock(inset, state) {
+  const el = $("lock"), vf = $("vf"), g = $("guide");
+  if (state === "off" || g.hidden) { el.hidden = true; return; }
+  const box = vf.getBoundingClientRect(), gb = g.getBoundingClientRect();
+  Object.assign(el.style, { left: gb.left - box.left + gb.width * inset + "px", top: gb.top - box.top + gb.height * inset + "px",
+    width: gb.width * (1 - 2 * inset) + "px", height: gb.height * (1 - 2 * inset) + "px" });
+  el.classList.toggle("hit", state === "hit");
+  el.hidden = false;
+}
+function freezeFrame() {
+  const v = $("video");
+  if (!stream || v.hidden || !v.videoWidth) return false;
+  try {
+    const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    const img = $("preview"); img.src = c.toDataURL("image/jpeg", 0.85); img.classList.add("frozen"); img.hidden = false;
+    return true;
+  } catch { return false; }
+}
 function finishScan() {
   scanning = false; loopId++;
+  if (freezeFrame()) { showLock(lockInset, "hit"); beep(); try { navigator.vibrate && navigator.vibrate(40); } catch {} }
   closeCam(); setScanUI("found");
   $("ocrPeek").hidden = true; $("visPeek").hidden = true;
 }
-function stopScan() { scanning = false; loopId++; closeCam(); setScanUI("idle"); $("ocrPeek").hidden = true; $("visPeek").hidden = true; }
+function stopScan() { scanning = false; loopId++; showLock(0, "off"); closeCam(); setScanUI("idle"); $("ocrPeek").hidden = true; $("visPeek").hidden = true; }
 
 $("scanBtn").onclick = () => { if (scanning) { stopScan(); setStatus(""); } else startScan(); };
 
@@ -2660,15 +2708,121 @@ async function scanFromImage(img, quiet, opts = {}) {
 }
 function onPhoto(e) {
   const f = e.target.files && e.target.files[0]; if (!f) return;
-  scanning = false; loopId++; closeCam(); setScanUI("idle");
-  const img = $("preview");
+  scanning = false; loopId++; showLock(0, "off"); closeCam(); setScanUI("idle");
+  const img = $("preview"); img.classList.remove("frozen");
   img.onload = async () => { try { await scanFromImage(img); } catch (err) { setStatus("识别失败：" + esc(err.message)); } };
   img.src = URL.createObjectURL(f); img.hidden = false; $("vfEmpty").hidden = true; $("vf").classList.remove("idle");
   $("results").innerHTML = "";
   e.target.value = "";
 }
 $("shootIn").onchange = onPhoto;
+$("beepIn").checked = !!store.get("ptcg.beep", 1);
+$("beepIn").onchange = (e) => { store.set("ptcg.beep", e.target.checked ? 1 : 0); if (e.target.checked) { unlockAudio(); beep(); } };
 $("pickIn").onchange = onPhoto;
+
+// ---------- 文字查卡：名字（中 / 日 / 英，同音字、错字、绰号）+ 版本 + 编号 / promo ----------
+// 词典 names.json（tools/build-names.mjs 生成）+ 绰号 aliases.json；在卡图库 vis/meta.json 里找（TCGplayer 上所有日版 / 美版单卡）
+let srchMod = null, srchDict = null, srchMeta = null;
+function searchLib() {
+  if (!srchMod) srchMod = import("./search.js").catch((e) => { srchMod = null; throw e; });
+  if (!srchDict) srchDict = srchMod.then((S) => Promise.all([
+    fetch("names.json").then((r) => r.json()), fetch("aliases.json").then((r) => r.json()).catch(() => ({})),
+  ]).then(([n, a]) => S.makeDict(n, a))).catch((e) => { srchDict = null; throw e; });
+  if (!srchMeta) srchMeta = (visIndex ? Promise.resolve(visIndex.meta) : fetch("vis/meta.json").then((r) => r.json())).catch((e) => { srchMeta = null; throw e; });
+  return Promise.all([srchMod, srchDict, srchMeta]).then(([S, dict, meta]) => ({ S, dict, meta }));
+}
+// 卡图库里的一张 → 卡片对象
+function metaProduct(meta, i) {
+  const it = meta.items[i], s = meta.sets[it[1]];
+  return { id: it[0], set: s[0], line: s[1] === "en" ? "pokemon" : "pokemon-japan", number: it[2], name: cleanTpName(it[3]), rarity: it[4], rel: it[5] };
+}
+async function prodCand(p) {
+  const c = await candFromProduct({ p, s: { line: p.line } }).catch(() => null);
+  if (!c) return null;
+  c.enName = p.name;
+  // 球纹 / 镜面 / Staff 等版本：换成日文名以后版本说明会丢，补回来
+  const v = (String(p.name).match(/\(([^)]+)\)|\[([^\]]+)\]/) || []).slice(1).find(Boolean);
+  if (v && !String(c.name).includes(v)) c.name += `（${v}）`;
+  return c;
+}
+// 简中：PriceCharting 的中文系列，按英文名找
+async function zhCnByName(en, num) {
+  const base = proxyUrl();
+  if (!base || !en) return [];
+  let j;
+  try { j = await getJSON(`${base}?pcs=${encodeURIComponent("pokemon chinese " + en)}`, `pcs.any.${en.toLowerCase()}`, 6 * 3600e3); } catch { return []; }
+  const out = [];
+  for (const p of j.items || []) {
+    const m = /Chinese/i.test(p.set) && String(p.name).match(/^(.*?)\s*(\[.*?\])?\s*#(\d+)\s*$/);
+    if (!m || m[1].toLowerCase().replace(/\s+ex$/, "") .indexOf(en.toLowerCase().replace(/\s+ex$/, "")) < 0) continue;
+    const n = parseInt(m[3], 10);
+    if (num != null && n !== num) continue;
+    const lid = String(n).padStart(3, "0");
+    out.push({ lang: "zh-cn", id: `pc${p.id}`, localId: lid, name: m[1] + (m[2] ? " " + m[2] : ""), pcq: `${p.set} ${m[1]} #${n}`, pcImg: p.img || "",
+      setId: "", setName: String(p.set).replace(/^Pokemon\s*/i, ""), official: null, rel: null });
+  }
+  return out;
+}
+const PAGE = 12;
+function showList(cands, title) {
+  const box = $("results");
+  box.innerHTML = "";
+  setStatus(title);
+  box.classList.toggle("choose", cands.length > 1);
+  cands.forEach((c) => (c._first = cands[0]));
+  let shown = 0;
+  const more = document.createElement("button");
+  more.className = "btn small"; more.dataset.retry = 1; more.style.gridColumn = "1 / -1";
+  const page = () => {
+    for (const c of cands.slice(shown, shown + PAGE)) box.insertBefore(mountCard(c, cands.length > 1, document.createDocumentFragment()), more);
+    shown += PAGE;
+    more.hidden = shown >= cands.length;
+    more.textContent = `显示更多（还有 ${cands.length - shown} 张）`;
+  };
+  box.appendChild(more);
+  page();
+  more.onclick = page;
+  setTimeout(() => $("status").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+}
+// 名字查卡。返回 true 表示处理了（找到了或者明确说了没找到）
+async function nameSearch(s) {
+  let L;
+  try { L = await searchLib(); } catch { return false; }
+  const { S, dict, meta } = L, q = S.parseQuery(s);
+  const names = q.name ? S.matchNames(dict, q.name) : [];
+  const langWord = [...q.langs].map((l) => LANGS[l]).join(" / ");
+  const label = [names.length ? names[0].e.hans || names[0].e.hant || names[0].e.ja || names[0].e.en : q.name, q.mega ? "Mega" + (q.megaXY ? " " + q.megaXY.toUpperCase() : "") : "",
+    q.suffix || "", q.set || "", q.promo ? "promo" : "", q.code || "", q.num != null ? "#" + q.num : "", langWord].filter(Boolean).join(" ");
+  // 简中：PriceCharting
+  if (q.langs.has("zh-cn") && q.langs.size === 1) {
+    const list = [];
+    for (const h of names.slice(0, 3)) list.push(...(await zhCnByName(h.e.en, q.num)));
+    if (list.length) { showList(list, `「${esc(label)}」：简中 ${list.length} 张（PriceCharting 收录的系列），点你手上那张：`); return true; }
+    setStatus(`「${esc(label)}」：简中卡目前只有 PriceCharting 收录的几个系列有资料，没找到。可以输入系列代码和编号，例如 <code>CSV8C 236</code>。`);
+    return true;
+  }
+  const hits = S.findCards(meta, q, names, 60);
+  let prods = hits.map((h) => metaProduct(meta, h.i));
+  // 卡图库里没有：直接问 TCGplayer（老卡、没卡图的版本）
+  if (!prods.length && (q.name || q.num != null)) {
+    const term = [names[0] ? names[0].e.en : q.name, q.num != null ? String(q.num).padStart(3, "0") : ""].filter(Boolean).join(" ");
+    const lines = q.langs.has("en") && !q.langs.has("ja") && !q.langs.has("zh-tw") ? ["pokemon"] : q.langs.size ? ["pokemon-japan"] : ["pokemon", "pokemon-japan"];
+    for (const line of lines) try { for (const p of (await tcgSearch(term, line)) || []) prods.push({ ...p, line }); } catch {}
+  }
+  if (!prods.length) {
+    if (!names.length && q.name) return false; // 名字完全对不上：交给原来的读编号方法
+    setStatus(`没找到「${esc(label)}」。试试换个写法（英文名 / 日文名），或者输入系列代码和编号，例如 <code>SV8a 236</code>、<code>SWSH085</code>、<code>120/SV-P</code>。`);
+    $("results").innerHTML = "";
+    return true;
+  }
+  setStatus(`「${esc(label)}」：找到 ${hits.length >= 60 ? "很多" : prods.length} 张，整理中…`);
+  let cands = (await Promise.all(prods.slice(0, 60).map(prodCand))).filter(Boolean);
+  // 繁中：日版卡换成繁中版本（没有繁中资料的沿用日版）
+  if (q.langs.has("zh-tw") && !q.langs.has("ja")) cands = (await Promise.all(cands.map((c) => (c.lang === "ja" ? counterpart(c).catch(() => null) : c)))).filter(Boolean);
+  const nm = names[0] && names[0].e;
+  showList(cands, `「${esc(label)}」${nm && nm.en && !/^[\x00-\x7f]+$/.test(q.name) ? `（${esc(nm.en)}）` : ""}：${cands.length >= 60 ? "最相关的 60" : cands.length} 张，新的在前。点你手上那张，或者加上版本 / 编号缩小范围（例：<code>${esc(q.name || "皮卡丘")} 日版 25</code>）`);
+  return true;
+}
 
 $("manualForm").onsubmit = async (e) => {
   e.preventDefault();
@@ -2678,7 +2832,15 @@ $("manualForm").onsubmit = async (e) => {
   $("manualIn").value = ""; $("manualIn").blur();
   if (scanning) { scanning = false; loopId++; setScanUI(stream ? "found" : "idle"); }
   setStatus("查找卡牌中…");
-  await showResults(parseText(s, true), false);
+  // 「系列代码 + 编号」（SV8a 236 / PAF EN 232 / M1L 65）照原来的方法；其他（名字、promo、版本）用名字查卡
+  const parsed = parseText(s, true);
+  if (parsed.nums.length) {
+    const idx = await getIndex().catch(() => null);
+    const isCode = (t) => idx && LANG_KEYS.some((l) => idx[l] && idx[l].map.has(t));
+    if (parsed.tokens.some(isCode) || /^[\d\s\/]+$/.test(s)) return void (await showResults(parsed, false));
+  }
+  if (await nameSearch(s)) return;
+  await showResults(parsed, false);
 };
 
 // ---------- 收藏页：一个总列表，可按版本筛选、排序 ----------

@@ -1,20 +1,28 @@
 // 更新整卡比对的卡图库（vis/vec.bin + vis/meta.json），只算新卡。GitHub Actions 每周跑一次（.github/workflows/index.yml），也可以本地跑：
 //   npm i --no-save playwright && npx playwright install chromium && node tools/update-index.mjs
 // 做的事和原来电脑上的三步一样（build-catalog.ps1 → add-originals.ps1 → build-index.html），合成一个：
-// 1. 问 TCGplayer 每个系列有几张单卡，比卡图库里多的系列才去一页一页列（2020 年以后发售的日版 / 美版）
+// 1. 问 TCGplayer 每个系列有几张单卡，比卡图库里多的系列才去一页一页列（日版 / 美版，所有年份，包括各种特典卡）
 // 2. 复刻卡（Classic Collection）按「卡名 + 编号」找原版一起加进去（扫描时原版和复刻一起列出来让你选）
 // 3. 在无界面的 Chrome 里用网页同一份 vis.js 算特征（保证和手机上扫描时的算法完全一样），接在卡图库后面
+// 卡很多时分几次做完：每算 1000 张存一次，到了时间（MINUTES，默认 80 分钟）就停，下次接着算。
+// TCGplayer 上没有卡图的商品（很多球纹版、预售）记在 vis/noimg.json，60 天后再试，免得每周都白下载一遍。
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SINCE = process.env.SINCE || "2020-01-01";
+const SINCE = process.env.SINCE || "1996-01-01";
 const LIMIT = +process.env.LIMIT || 0; // 测试用：最多算几张
+const MINUTES = +process.env.MINUTES || 80;
+const PAGES = +process.env.PAGES || 3; // 同时开几个网页算（CPU 核数 - 1 左右）
+const NOIMG_RETRY_DAYS = 60;
 const API = "https://mp-search-api.tcgplayer.com/v1/search/request?isList=false&q=";
+const T0 = Date.now();
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 const day = (s) => String(s || "").slice(0, 10);
+const today = day(new Date().toISOString());
 const stripNo = (s) => String(s || "").replace(/\s*-\s*[\w/]+$/, "");
+const F = (f) => path.join(ROOT, f);
 
 async function search(term, from, size, q = "", fuzzy = false, range = {}) {
   const body = {
@@ -36,37 +44,41 @@ async function search(term, from, size, q = "", fuzzy = false, range = {}) {
 const toItem = (p, l) => ({ id: +p.productId, l, set: p.setName, n: String(p.customAttributes?.number || ""), name: p.productName, r: String(p.rarityName || ""), rel: day(p.customAttributes?.releaseDate) });
 
 // ---------- 1. 新卡清单 ----------
-const meta = JSON.parse(fs.readFileSync(path.join(ROOT, "vis/meta.json"), "utf8"));
-const vecOld = fs.readFileSync(path.join(ROOT, "vis/vec.bin"));
-if (vecOld.length !== meta.items.length * meta.D) throw new Error("vec.bin 和 meta.json 对不上");
+const meta = JSON.parse(fs.readFileSync(F("vis/meta.json"), "utf8"));
+let vecAll = fs.readFileSync(F("vis/vec.bin"));
+if (vecAll.length !== meta.items.length * meta.D) throw new Error("vec.bin 和 meta.json 对不上");
+let noimg = {}; // 商品号 → [ "l|系列", 上次试的日期 ]
+try { noimg = JSON.parse(fs.readFileSync(F("vis/noimg.json"), "utf8")); } catch {}
+const stale = (d) => (Date.parse(today) - Date.parse(d)) / 864e5 >= NOIMG_RETRY_DAYS;
 const have = new Set(meta.items.map((x) => x[0]));
-const perSet = new Map(); // "l|set" → 卡图库里有几张
-for (const it of meta.items) { const s = meta.sets[it[1]], k = s[1] + "|" + s[0]; perSet.set(k, (perSet.get(k) || 0) + 1); }
+const perSet = new Map(); // "l|set" → 卡图库里有几张（加上没有卡图、还不用再试的）
+const bump = (k) => perSet.set(k, (perSet.get(k) || 0) + 1);
+for (const it of meta.items) { const s = meta.sets[it[1]]; bump(s[1] + "|" + s[0]); }
+for (const [, [k, d]] of Object.entries(noimg)) if (!stale(d)) bump(k);
 const fresh = [];
+const RANGE = SINCE > "1996" ? { releaseDate: { gte: SINCE } } : {};
 for (const [line, l] of [["pokemon-japan", "ja"], ["pokemon", "en"]]) {
-  // 只要有 2020 年以后发售的卡的系列（按发售日筛，几百个老系列不用一个一个看）
-  const RECENT = { releaseDate: { gte: SINCE } };
-  const sets = (await search({ productLineName: [line], productTypeName: ["Cards"] }, 0, 1, "", false, RECENT)).aggregations.setName;
+  const sets = (await search({ productLineName: [line], productTypeName: ["Cards"] }, 0, 1, "", false, RANGE)).aggregations.setName;
   let looked = 0;
   for (const s of sets) {
-    // TCGplayer 的张数比卡图库多才需要看（有的卡没有编号 / 没有图，所以差一点点的也会每次看一下，不费事）
+    // TCGplayer 的张数比卡图库多才需要看
     if ((perSet.get(l + "|" + s.value) || 0) >= s.count) continue;
     const got = [];
-    for (let from = 0; from < 1500; from += 50) {
-      const page = await search({ productLineName: [line], setName: [s.urlValue], productTypeName: ["Cards"] }, from, 50, "", false, RECENT);
-      for (const p of page.results) if (/\d/.test(String(p.customAttributes?.number || ""))) got.push(toItem(p, l));
+    for (let from = 0; from < 2000; from += 50) {
+      const page = await search({ productLineName: [line], setName: [s.urlValue], productTypeName: ["Cards"] }, from, 50, "", false, RANGE);
+      for (const p of page.results) got.push(toItem(p, l));
       if (page.results.length < 50 || from + 50 >= page.totalResults) break;
-      await sleep(250);
+      await sleep(200);
     }
     looked++;
-    const add = got.filter((x) => !have.has(x.id) && (!x.rel || x.rel >= SINCE));
+    const add = got.filter((x) => !have.has(x.id) && !(noimg[x.id] && !stale(noimg[x.id][1])));
     for (const x of add) have.add(x.id);
     if (add.length) { fresh.push(...add); console.log(`  ${l} ${s.value}: +${add.length}`); }
   }
   console.log(`${line}：${sets.length} 个系列，看了 ${looked} 个`);
 }
-// ---------- 2. 复刻卡的原版 ----------
-for (const c of fresh.filter((x) => /Classic Collection/.test(x.set))) {
+// ---------- 2. 复刻卡的原版（老卡已经整套在库里了，这一步只在只收新卡时有用） ----------
+if (SINCE > "1996") for (const c of fresh.filter((x) => /Classic Collection/.test(x.set))) {
   const name = stripNo(c.name).replace(/\s*\(.*?\)/g, "").trim(), num = c.n.split("/")[0].replace(/^0+/, "");
   let res;
   try { res = (await search({ productLineName: [c.l === "en" ? "pokemon" : "pokemon-japan"], productTypeName: ["Cards"] }, 0, 24, `${name} ${c.n}`, true)).results; } catch { continue; }
@@ -81,6 +93,8 @@ for (const c of fresh.filter((x) => /Classic Collection/.test(x.set))) {
   }
   await sleep(250);
 }
+// 新出的卡先算（老卡多，分几次做完时新卡不用等）
+fresh.sort((a, b) => (b.rel || "").localeCompare(a.rel || ""));
 const todo = LIMIT ? fresh.slice(0, LIMIT) : fresh;
 console.log(`新卡 ${fresh.length} 张${LIMIT ? `（这次只算 ${todo.length} 张）` : ""}`);
 if (process.env.DRY) { fs.writeFileSync(process.env.DRY, JSON.stringify(fresh, null, 1)); process.exit(0); } // 只看清单不算
@@ -89,55 +103,77 @@ if (!todo.length) process.exit(0);
 // ---------- 3. 算特征（无界面 Chrome，网页同一份 vis.js） ----------
 const { chromium } = await import(process.env.PLAYWRIGHT || "playwright");
 const browser = await chromium.launch();
-const page = await browser.newPage();
-page.on("console", (m) => m.type() === "error" && console.log("  [网页]", m.text()));
-// 网站文件直接从仓库里读（模型在 models/ 下面，和网站上一样）
 const TYPES = { ".js": "text/javascript", ".json": "application/json", ".onnx": "application/octet-stream", ".html": "text/html" };
-await page.route("http://site.local/**", (route) => {
-  const f = path.join(ROOT, decodeURIComponent(new URL(route.request().url()).pathname));
-  if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: "" });
-  return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || "application/octet-stream", body: fs.readFileSync(f) });
-});
-await page.goto("http://site.local/manifest.json");
-await page.evaluate(async () => {
-  window.V = await import("/vis.js");
-  const m = await V.loadModel();
-  window.loadImg = (u) => new Promise((ok, no) => {
-    const i = new Image(), t = setTimeout(() => { i.src = ""; no(u); }, 20000);
-    i.crossOrigin = "anonymous"; i.onload = () => { clearTimeout(t); ok(i); }; i.onerror = () => { clearTimeout(t); no(u); }; i.src = u;
+async function openPage() {
+  const page = await browser.newPage();
+  // 网站文件直接从仓库里读（模型在 models/ 下面，和网站上一样）
+  await page.route("http://site.local/**", (route) => {
+    const f = path.join(ROOT, decodeURIComponent(new URL(route.request().url()).pathname));
+    if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: "" });
+    return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || "application/octet-stream", body: fs.readFileSync(f) });
   });
-  window.embedId = async (id) => {
-    let im = null;
-    for (const u of [`https://tcgplayer-cdn.tcgplayer.com/product/${id}_200w.jpg`, `https://tcgplayer-cdn.tcgplayer.com/product/${id}_in_400x400.jpg`]) {
-      try { im = await loadImg(u); break; } catch {}
-    }
-    if (!im) return null;
-    return Array.from(V.quantize(await V.embed(V.cardCanvas(im, 0, 0, im.naturalWidth, im.naturalHeight))));
-  };
-  return m.device;
-}).then((d) => console.log("模型：", d));
+  await page.goto("http://site.local/manifest.json");
+  const device = await page.evaluate(async () => {
+    window.V = await import("/vis.js");
+    const m = await V.loadModel();
+    window.loadImg = (u) => new Promise((ok, no) => {
+      const i = new Image(), t = setTimeout(() => { i.src = ""; no(u); }, 20000);
+      i.crossOrigin = "anonymous"; i.onload = () => { clearTimeout(t); ok(i); }; i.onerror = () => { clearTimeout(t); no(u); }; i.src = u;
+    });
+    // 一批：图片同时下载，特征一张一张算。没有图返回 null
+    window.embedIds = (ids) => Promise.all(ids.map(async (id) => {
+      for (const u of [`https://tcgplayer-cdn.tcgplayer.com/product/${id}_200w.jpg`, `https://tcgplayer-cdn.tcgplayer.com/product/${id}_in_400x400.jpg`]) {
+        try { return await loadImg(u); } catch {}
+      }
+      return null;
+    })).then(async (ims) => {
+      const out = [];
+      for (const im of ims) out.push(im ? Array.from(V.quantize(await V.embed(V.cardCanvas(im, 0, 0, im.naturalWidth, im.naturalHeight)))) : null);
+      return out;
+    });
+    return m.device;
+  });
+  return { page, device };
+}
+const pages = [];
+for (let i = 0; i < PAGES; i++) pages.push(await openPage());
+console.log(`模型：${pages[0].device} × ${pages.length}`);
 
 const setIdx = new Map(meta.sets.map((s, i) => [s[1] + "|" + s[0], i]));
-const vecs = [];
-let ok = 0, fail = 0;
-for (let i = 0; i < todo.length; i += 8) {
-  const batch = todo.slice(i, i + 8);
-  const out = await page.evaluate((ids) => Promise.all(ids.map((id) => embedId(id).catch(() => null))), batch.map((c) => c.id));
-  batch.forEach((c, j) => {
-    if (!out[j]) { fail++; return; } // 还没有卡图（预售）：下次再试
-    const key = c.l + "|" + c.set;
-    if (!setIdx.has(key)) { setIdx.set(key, meta.sets.length); meta.sets.push([c.set, c.l]); }
-    meta.items.push([c.id, setIdx.get(key), c.n, stripNo(c.name), c.r, c.rel || ""]);
-    vecs.push(Int8Array.from(out[j]));
-    ok++;
-  });
-  if ((i / 8) % 25 === 0) console.log(`  ${Math.min(i + 8, todo.length)}/${todo.length}`);
+let fresh8 = [], ok = 0, fail = 0, sinceSave = 0, next = 0, stop = false;
+function save() {
+  if (fresh8.length) {
+    const add = new Int8Array(fresh8.length * meta.D);
+    fresh8.forEach((v, i) => add.set(v, i * meta.D));
+    vecAll = Buffer.concat([vecAll, Buffer.from(add.buffer)]);
+    fresh8 = [];
+  }
+  meta.built = today;
+  fs.writeFileSync(F("vis/vec.bin"), vecAll);
+  fs.writeFileSync(F("vis/meta.json"), JSON.stringify(meta));
+  fs.writeFileSync(F("vis/noimg.json"), JSON.stringify(noimg));
+  sinceSave = 0;
 }
+async function worker({ page }) {
+  while (!stop && next < todo.length) {
+    if ((Date.now() - T0) / 60e3 > MINUTES) { stop = true; break; }
+    const batch = todo.slice(next, next + 8); next += 8;
+    let out;
+    try { out = await page.evaluate((ids) => embedIds(ids), batch.map((c) => c.id)); } catch (e) { console.log("  这批出错，下次再算：", String(e).slice(0, 120)); continue; }
+    batch.forEach((c, j) => {
+      const key = c.l + "|" + c.set;
+      if (!out[j]) { fail++; noimg[c.id] = [key, today]; return; }
+      delete noimg[c.id];
+      if (!setIdx.has(key)) { setIdx.set(key, meta.sets.length); meta.sets.push([c.set, c.l]); }
+      // meta 和向量要一一对应：两边同时加
+      meta.items.push([c.id, setIdx.get(key), c.n, stripNo(c.name), c.r, c.rel || ""]);
+      fresh8.push(Int8Array.from(out[j]));
+      ok++; sinceSave++;
+    });
+    if (sinceSave >= 1000) { save(); console.log(`  已算 ${ok + fail}/${todo.length}（${((Date.now() - T0) / 60e3).toFixed(0)} 分钟），已保存`); }
+  }
+}
+await Promise.all(pages.map(worker));
 await browser.close();
-if (!ok) { console.log(`没有算出新卡（没有卡图 ${fail} 张）`); process.exit(0); }
-const add = new Int8Array(vecs.length * meta.D);
-vecs.forEach((v, i) => add.set(v, i * meta.D));
-fs.writeFileSync(path.join(ROOT, "vis/vec.bin"), Buffer.concat([vecOld, Buffer.from(add.buffer)]));
-meta.built = new Date().toISOString().slice(0, 10);
-fs.writeFileSync(path.join(ROOT, "vis/meta.json"), JSON.stringify(meta));
-console.log(`卡图库：加了 ${ok} 张（没有卡图 ${fail} 张），共 ${meta.items.length} 张`);
+save();
+console.log(`卡图库：加了 ${ok} 张（没有卡图 ${fail} 张），共 ${meta.items.length} 张${stop ? `；时间到了，还剩 ${todo.length - next} 张下次接着算` : ""}`);
