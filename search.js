@@ -71,8 +71,11 @@ export function makeDict(json, aliases = {}) {
     return { en, ja, hant, hans, kind, forms, py };
   });
   const byEn = new Map(entries.map((e) => [e.en.toLowerCase(), e]));
-  const alias = new Map(Object.entries(aliases).filter(([k]) => !k.startsWith("_")).map(([k, v]) => [norm(k), v]));
-  return { entries, byEn, alias };
+  // 值以「=」开头的是「换成这句话再查」（指向某一张卡：「黄昏莉莉艾」→「=397/SM-P」），其他是英文卡名
+  const all = Object.entries(aliases).filter(([k]) => !k.startsWith("_"));
+  const alias = new Map(all.filter(([, v]) => !(typeof v === "string" && v.startsWith("="))).map(([k, v]) => [norm(k), v]));
+  const rewrite = new Map(all.filter(([, v]) => typeof v === "string" && v.startsWith("=")).map(([k, v]) => [norm(k), v.slice(1).trim()]));
+  return { entries, byEn, alias, rewrite };
 }
 
 function lev(a, b) {
@@ -83,6 +86,13 @@ function lev(a, b) {
     for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = t; }
   }
   return d[b.length];
+}
+// 整句是「换一句话查」的绰号：返回换过的句子（版本词等其他部分保留），否则原样返回
+export function aliasRewrite(dict, text) {
+  const q = parseQuery(text), k = norm(q.name);
+  if (!k || !dict.rewrite || !dict.rewrite.has(k)) return text;
+  const extra = [...q.langs].map((l) => ({ ja: "日版", en: "美版", "zh-cn": "简中", "zh-tw": "繁中" })[l]).join(" ");
+  return (dict.rewrite.get(k) + " " + extra).trim();
 }
 // 名字 → 词典里最像的几条（每条带分数）。返回的 en 是用来在卡图库（英文名）里找卡的
 export function matchNames(dict, name, depth = 0) {

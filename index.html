@@ -2848,7 +2848,9 @@ function showList(cands, title) {
 async function nameSearch(s) {
   let L;
   try { L = await searchLib(); } catch { return false; }
-  const { S, dict, meta } = L, q = S.parseQuery(s);
+  const { S, dict, meta } = L;
+  s = S.aliasRewrite(dict, s); // 指向某一张卡的绰号（黄昏莉莉艾 → 397/SM-P）
+  const q = S.parseQuery(s);
   const names = q.name ? S.matchNames(dict, q.name) : [];
   const langWord = [...q.langs].map((l) => LANGS[l]).join(" / ");
   const label = [names.length ? names[0].e.hans || names[0].e.hant || names[0].e.ja || names[0].e.en : q.name, q.mega ? "Mega" + (q.megaXY ? " " + q.megaXY.toUpperCase() : "") : "",
@@ -2892,14 +2894,17 @@ $("manualForm").onsubmit = async (e) => {
   $("manualIn").value = ""; $("manualIn").blur();
   if (scanning) { scanning = false; loopId++; setScanUI(stream ? "found" : "idle"); }
   setStatus("查找卡牌中…");
+  // 指向某一张卡的绰号先换掉（黄昏莉莉艾 → 397/SM-P）
+  let s2 = s;
+  try { const L = await searchLib(); s2 = L.S.aliasRewrite(L.dict, s); } catch {}
   // 「系列代码 + 编号」（SV8a 236 / PAF EN 232 / M1L 65）照原来的方法；其他（名字、promo、版本）用名字查卡
-  const parsed = parseText(s, true);
+  const parsed = parseText(s2, true);
   if (parsed.nums.length) {
     const idx = await getIndex().catch(() => null);
     const isCode = (t) => idx && LANG_KEYS.some((l) => idx[l] && idx[l].map.has(t));
-    if (parsed.tokens.some(isCode) || /^[\d\s\/]+$/.test(s)) return void (await showResults(parsed, false));
+    if (parsed.tokens.some(isCode) || /^[\d\s\/]+$/.test(s2)) return void (await showResults(parsed, false));
   }
-  if (await nameSearch(s)) return;
+  if (await nameSearch(s2)) return;
   await showResults(parsed, false);
 };
 
