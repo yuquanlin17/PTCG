@@ -1,0 +1,28 @@
+# 每周更新整卡比对的卡图库（vis/vec.bin + vis/meta.json）：TCGplayer 上新出的日版 / 美版单卡（新系列、球纹 / 镜面等新版本），只算新卡
+# 以前要在电脑上跑 build-catalog.ps1 → add-originals.ps1 → build-index.html，现在自动做（tools/update-index.mjs）
+name: 更新卡图库
+on:
+  schedule:
+    - cron: "43 20 * * 2"   # 每周二 UTC 20:43（北京时间周三 4:43）
+  workflow_dispatch:        # 出新系列时也可以在 Actions 页面手动跑
+permissions:
+  contents: write
+concurrency:
+  group: push-main          # 和发售日历的任务错开，免得同时提交
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm i --no-save playwright@1.64.1 && npx playwright install --with-deps chromium
+      - run: node tools/update-index.mjs
+      - name: 有变化就提交
+        run: |
+          git config user.name "calendar-bot"
+          git config user.email "calendar-bot@users.noreply.github.com"
+          git add vis/vec.bin vis/meta.json
+          git diff --cached --quiet || (git commit -m "更新卡图库" && git pull --rebase && git push)

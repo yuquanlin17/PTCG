@@ -7,15 +7,17 @@ on:
   workflow_dispatch:        # 也可以在 Actions 页面手动跑
 permissions:
   contents: write
+concurrency:
+  group: push-main          # 和更新卡图库的任务错开，免得同时提交
 jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
       - run: npm i --no-save sharp@0.33.5
       - run: node tools/calendar.mjs
       - name: 识别模型
@@ -27,4 +29,4 @@ jobs:
           git config user.name "calendar-bot"
           git config user.email "calendar-bot@users.noreply.github.com"
           git add -A cal-cn.json cal-msrp.json cal-img models
-          git diff --cached --quiet || (git commit -m "更新发售日历" && git push)
+          git diff --cached --quiet || (git commit -m "更新发售日历" && git pull --rebase && git push)

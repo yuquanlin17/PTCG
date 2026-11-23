@@ -119,8 +119,10 @@ async function updateMsrp() {
 try { await updateMsrp(); } catch (e) { console.warn("建议零售价没更新：", e); }
 
 const old = readJson("cal-cn.json"), known = new Map(old.items.map((x) => [x.id, x]));
-const list = parseCnList(await (await get(CN_LIST, CN_HEADERS)).text());
-if (!list.length) throw new Error("读不到简中商品资讯列表");
+// 简中官网在国外偶尔连不上：这次就保留上次的 cal-cn.json，不让整个任务失败（上面的零售价照样提交）
+let list = [];
+try { list = parseCnList(await (await get(CN_LIST, CN_HEADERS)).text()); } catch (e) { console.warn("简中官网连不上，这次跳过：", String(e && e.cause || e)); }
+if (!list.length) { console.warn("读不到简中商品资讯列表，保留上次的结果"); process.exit(0); }
 fs.mkdirSync(new URL("cal-img/", ROOT), { recursive: true });
 // 只看最近 60 天公布的；读不出日期的只在公布后 30 天内显示「发售日待定」（再久多半已经发售）
 const recent = ymd(new Date(Date.now() - 60 * 864e5)), tbdFrom = ymd(new Date(Date.now() - 30 * 864e5));
