@@ -1,0 +1,18 @@
+{
+  "_说明": "绰号 / 玩家叫法 → 卡在 TCGplayer 上的英文名（可以写一个或几个）；指向某一张卡就写「=编号」（=397/SM-P、=SV8a 236、=SWSH085）。直接在这里加，传到 GitHub 就生效。左边写法不分大小写、空格和「的」。",
+  "黄昏莉莉艾": "=397/SM-P",
+  "侦探皮卡丘": "Detective Pikachu",
+  "名侦探皮卡丘": "Detective Pikachu",
+  "大侦探皮卡丘": "Detective Pikachu",
+  "皮神": "Pikachu",
+  "小智": "Ash",
+  "小智的皮卡丘": "Ash's Pikachu",
+  "月伊": ["Umbreon VMAX", "Umbreon"],
+  "moonbreon": "Umbreon VMAX",
+  "拉帝兄妹": ["Latias & Latios GX", "Latios & Latias"],
+  "博士的研究": "Professor's Research",
+  "老大的指令": "Boss's Orders",
+  "boss": "Boss's Orders",
+  "超梦梦幻": ["Mewtwo & Mew GX"],
+  "三神鸟": ["Articuno & Zapdos & Moltres GX"]
+}
