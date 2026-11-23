@@ -308,6 +308,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
     </form>
     <div class="linkrow">
       <label class="linkbtn" for="pickIn">从相册选图</label>
+      <button class="linkbtn" type="button" id="centerBtn">居中检测（送评前看看）</button>
     </div>
     <div class="tray" id="tray" hidden>
       <div class="tray-head">本次扫描 <b id="trayTotal" data-usd="0">$0.00</b><span id="trayCount"></span><button id="trayClear">清空</button></div>
@@ -2716,6 +2717,7 @@ function onPhoto(e) {
   e.target.value = "";
 }
 $("shootIn").onchange = onPhoto;
+$("centerBtn").onclick = () => import("./centering.js").then((m) => m.openCentering()).catch((e) => toast("居中检测加载失败：" + e.message));
 $("beepIn").checked = !!store.get("ptcg.beep", 1);
 $("beepIn").onchange = (e) => { store.set("ptcg.beep", e.target.checked ? 1 : 0); if (e.target.checked) { unlockAudio(); beep(); } };
 $("pickIn").onchange = onPhoto;
