@@ -20,11 +20,13 @@ jobs:
           node-version: 24
       - run: npm i --no-save playwright@1.64.1 && npx playwright install --with-deps chromium
       - run: node tools/update-index.mjs
+      - name: 没有卡图的卡借同一张画的卡图，算卡图对照表
+        run: node tools/fill-borrow.mjs && node tools/img-refs.mjs
       - name: 图鉴系列表（日版 / 美版）
         run: node tools/build-sets.mjs
       - name: 有变化就提交
         run: |
           git config user.name "calendar-bot"
           git config user.email "calendar-bot@users.noreply.github.com"
-          git add vis/vec.bin vis/meta.json vis/noimg.json vis/sets.json
+          git add vis/vec.bin vis/meta.json vis/noimg.json vis/sets.json vis/img.json
           git diff --cached --quiet || (git commit -m "更新卡图库" && git pull --rebase -X theirs && git push)

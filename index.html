@@ -289,6 +289,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
 .sheet-head .ph { display: flex; flex-direction: column; gap: 3px; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center; }
 .sheet-head .ph b { font-family: var(--font); font-size: 12.5px; }
 .sh-imgbtn:has(.ph) .sh-zoom { display: none; }
+.sh-imgbtn[data-ref="1"]::after { content: "参考图"; position: absolute; left: 4px; top: 4px; background: rgba(0,0,0,.62); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 5px; }
 .sheet-close { border: 0; background: var(--bg); width: 32px; height: 32px; border-radius: 50%; font-size: 18px; color: var(--muted); }
 .sheet .big { font-family: var(--mono); font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .chg { font-family: var(--mono); font-size: 13px; font-weight: 600; }
@@ -591,7 +592,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "11.28 · 系列图";
+const APP_VERSION = "11.29 · 补卡图";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -953,12 +954,31 @@ async function priceFor(x) {
 
 // 卡图：先用 TCGdex，没有就用 Limitless TCG 的图（新系列编号不补零，老系列补到三位，两种都试），都没有就显示占位卡
 const LIMITLESS = "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com";
+// 卡图对照表 vis/img.json：TCGplayer 上没有卡图的卡借用哪张图（同一张卡的普通版 / 原版，或者官网卡图）；~ 开头是参考图
+let imgRefs = null, imgRefsP = null;
+function loadImgRefs() {
+  if (!imgRefsP) imgRefsP = fetch("vis/img.json").then((r) => r.json()).then((j) => (imgRefs = j)).catch(() => (imgRefs = {}));
+  return imgRefsP;
+}
+loadImgRefs();
+const tpImg = (id, big) => `https://tcgplayer-cdn.tcgplayer.com/product/${id}_${big ? "in_1000x1000" : "200w"}.jpg`;
+const thumbOf = (u, w = 240) => `https://wsrv.nl/?url=${encodeURIComponent(u)}&w=${w}&output=webp&q=82`;
+// 商品号 → { thumb 列表用, full 原图, hi 大图, ref 是不是参考图 }；没借图返回 null
+function refImg(id) {
+  const r = imgRefs && imgRefs[id];
+  if (r == null || r === 0) return null;
+  const s = String(r), ref = s.startsWith("~"), v = s.replace(/^~/, "");
+  if (/^https?:/.test(v)) return { thumb: thumbOf(v), full: v, hi: v, ref };
+  return { thumb: tpImg(v), full: tpImg(v), hi: tpImg(v, true), ref };
+}
 function imgSources(x) {
   const out = [];
+  const rf = x.tpId ? refImg(x.tpId) : null;
+  if (rf) { out.push(rf.full); }
   const off = x.lang === "zh-cn" && !String(x.pcImg || "").includes("PTCG-CHS") ? cnOfficialImg(cnRow(x)) : "";
   if (off) out.push(off);
   if (x.pcImg) out.push(x.pcImg);
-  if (x.tpId && !x.noImg) out.push(`https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_200w.jpg`);
+  if (x.tpId && !x.noImg && !rf) out.push(`https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_200w.jpg`);
   if (x.image) out.push(x.image + "/low.webp");
   const n = parseInt(x.localId, 10);
   if (!isNaN(n)) {
@@ -3388,6 +3408,8 @@ const RANGE_DAYS = { month: 31, quarter: 92, annual: 366, y3: 1096, y5: 1827, al
 const LONG_RANGE = new Set(["y3", "y5", "all"]);
 // 大图：TCGplayer 1000 像素、PriceCharting 1600、TCGdex high
 function hiresOf(x) {
+  const rf = x.tpId ? refImg(x.tpId) : null;
+  if (rf) return rf.hi;
   const off = x.lang === "zh-cn" ? cnOfficialImg(cnRow(x)) || (String(x.pcImg || "").includes("PTCG-CHS") ? x.pcImg : "") : "";
   if (off) return off;
   if (x.tpId && !x.noImg) return `https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_in_1000x1000.jpg`;
@@ -3407,6 +3429,8 @@ function openHistory(x) {
   // 卡图位置：按钮里的第一个元素（以前按 id 找，卡图载不下来换成占位时 id 丢了，之后所有卡都打不开）
   const im = cardImg(x); im.id = "shImg"; $("shImgBtn").firstElementChild.replaceWith(im);
   // 没有卡图（占位）就不放大
+  const rfi = x.tpId ? refImg(x.tpId) : null;
+  $("shImgBtn").dataset.ref = rfi && rfi.ref ? "1" : "";
   $("shImgBtn").onclick = () => { const cur = $("shImg"); if (!cur || cur.tagName !== "IMG") return; openLightbox(hiresOf(x), cur.src); };
   $("shName").innerHTML = `<span class="lang-pill" data-l="${x.lang}">${LANGS[x.lang]}</span> ${esc(x.name)}`;
   const code = x.abbr || x.setId || "";
@@ -3613,7 +3637,7 @@ function go(page) {
   if (page !== "scan") stopScan();
   if (page === "lib") { renderLib(); refreshAll(false); }
   if (page === "cal") openCalendar();
-  if (page === "dex") import("./dex.js").then((m) => m.initDex({ $, esc, fmt, getJSON, proxyUrl, openHistory, addToLib, toast, store, searchLib, getVecIndex, go }))
+  if (page === "dex") import("./dex.js").then((m) => m.initDex({ $, esc, fmt, getJSON, proxyUrl, openHistory, addToLib, toast, store, searchLib, getVecIndex, go, loadImgRefs, refImg }))
     .catch((e) => { $("pageDex").innerHTML = `<div class="empty">图鉴载入失败：${esc(e.message)}</div>`; });
 }
 $("navScan").onclick = () => go("scan");

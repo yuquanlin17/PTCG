@@ -62,6 +62,7 @@ const CSS = `
 .dex-card .im img.ok, .dex-set .ic img.ok { opacity: 1; }
 .dex-card .im { flex-direction: column; gap: 3px; text-align: center; padding: 4px; }
 .dex-card .im b { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.dex-card .rf { position: absolute; left: 10px; top: 10px; z-index: 1; background: rgba(0,0,0,.6); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 5px; pointer-events: none; }
 .dex-card .im small { font-size: 10.5px; color: var(--muted); font-family: var(--mono); opacity: .8; overflow-wrap: anywhere; }
 .dex-card .im[data-none] { background: repeating-linear-gradient(135deg, var(--line) 0 8px, transparent 8px 16px), var(--line); }
 .dex-card .nm { font-weight: 700; font-size: 13px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -114,7 +115,8 @@ function build() {
 async function loadBase() {
   if (!base) base = (async () => {
     const L = await ctx.searchLib();
-    const [sets, noimg] = await Promise.all([
+    const [, sets, noimg] = await Promise.all([
+      ctx.loadImgRefs ? ctx.loadImgRefs() : null,
       fetch("vis/sets.json").then((r) => r.json()).catch(() => ({ sets: [] })),
       fetch("vis/noimg.json").then((r) => r.json()).catch(() => ({})),
     ]);
@@ -203,10 +205,11 @@ async function setList(B) {
 function jaEnCard(B, i, set) {
   const it = B.meta.items[i], s = B.meta.sets[it[1]], line = s[1] === "en" ? "pokemon" : "pokemon-japan";
   const [n, total] = String(it[2]).split("/");
-  const noImg = i >= B.nImg;
+  // TCGplayer 没有卡图的：用卡图对照表借的图（同一张卡的普通版 / 原版 / 官网卡图），~ 是参考图
+  const rf = ctx.refImg ? ctx.refImg(it[0]) : null, noImg = i >= B.nImg && !rf;
   const c = { lang: s[1], tpOnly: true, tpId: it[0], id: "tp" + it[0], name: zhName(B, it[3]), enName: it[3], setName: s[0], setId: set ? set.code : s[0].split(":")[0],
     localId: n || "", official: parseInt(total, 10) || null, tpNum: it[2], rel: it[5] || null, rar: RAR[it[4]] || "", var: varOf(it[3]), num: numOf(it[2]),
-    img: noImg ? "" : `https://tcgplayer-cdn.tcgplayer.com/product/${it[0]}_200w.jpg`, noImg, slug: (set && set.slug) || slugFor(B, s), line, price: undefined, _i: i };
+    img: rf ? rf.thumb : noImg ? "" : `https://tcgplayer-cdn.tcgplayer.com/product/${it[0]}_200w.jpg`, img2: rf && rf.thumb !== rf.full ? rf.full : "", refPic: !!(rf && rf.ref), noImg, slug: (set && set.slug) || slugFor(B, s), line, price: undefined, _i: i };
   c.goSet = () => goSet(s[1], s[1] + "|" + s[0]);
   c.versions = () => versionsJaEn(B, c);
   c.loadPrices = priceList;
@@ -489,7 +492,7 @@ function paint() {
 function tile(c) {
   const el = document.createElement("div"); el.className = "dex-card";
   const usd = c.price && c.price.usd;
-  el.innerHTML = `<div class="im"${c.img ? "" : ' data-none="1"'}><b>${c.img ? "" : "暂无图片"}</b><small>${ctx.esc(c.setId)} ${ctx.esc(c.localId)}</small></div><div class="nm">${ctx.esc(c.name)}</div>
+  el.innerHTML = `${c.refPic ? '<span class="rf">参考图</span>' : ""}<div class="im"${c.img ? "" : ' data-none="1"'}><b>${c.img ? "" : "暂无图片"}</b><small>${ctx.esc(c.setId)} ${ctx.esc(c.localId)}</small></div><div class="nm">${ctx.esc(c.name)}</div>
     <div class="sb">${ctx.esc((c.tpNum || c.localId || "") + (rarKey(c) ? " · " + rarKey(c) : ""))}</div>
     <div class="${usd != null ? "pr" : "pr na"}"${usd != null ? ` data-usd="${usd}"` : ""}>${usd != null ? ctx.fmt(usd) : c.price === undefined ? "查价格中…" : "暂无价格"}</div>
     <button class="add" aria-label="加入收藏" title="加入收藏">+</button>`;
