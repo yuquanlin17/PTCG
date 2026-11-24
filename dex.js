@@ -172,7 +172,7 @@ async function setList(B) {
   }
   if (st.lang === "zh-cn") {
     const cn = await loadCn(B);
-    return cn.sets.map((s, i) => ({ ...s, i })).filter((s) => s.lang === "zh-cn").map((s) => ({ key: "cn|" + s.slug, name: s.name, code: s.code, rel: s.rel, kind: /promo/i.test(s.slug) ? "promo" : "pack", i: s.i }))
+    return cn.sets.map((s, i) => ({ ...s, i })).filter((s) => s.lang === "zh-cn").map((s) => ({ key: "cn|" + s.slug, name: s.name, code: s.code, rel: s.rel, kind: s.kind || (/promo/i.test(s.slug) ? "promo" : "pack"), i: s.i }))
       // 排新旧：TCGdex 没写发售日的几套按大概时间排（只用来排序，不显示）；其他没日期的零散系列排最后
       .sort((a, b) => (b.rel || CN_ORDER[b.code] || "0").localeCompare(a.rel || CN_ORDER[a.code] || "0"));
   }
@@ -266,7 +266,7 @@ async function render() {
   const cs = curSets.find((s) => s.key === st.set);
   head.innerHTML = st.q ? "" : cs ? `<div class="dex-head"><div class="t">${ctx.esc(cs.name)}</div><div class="s">${ctx.esc(cs.code)}${cs.rel ? " · 发售日期 " + ctx.esc(cs.rel) : ""} · ${curCards.length} 张</div></div>` : "";
   root.querySelector("[data-note]").innerHTML = {
-    "zh-cn": "简中卡表和价格来自 PriceCharting（裸卡价，美元换算），只收录了它有的系列；没有的系列暂时看不到。",
+    "zh-cn": "简中卡表和卡图来自官方小程序卡表（社区整理的 PTCG-CHS-Datasets）；价格来自 PriceCharting（裸卡价，美元换算），PriceCharting 没收录的卡暂无价格。",
     "zh-tw": "繁中卡表来自 TCGdex；价格参考同编号的日版卡（TCGplayer 市价）。",
     ja: "日版卡表和价格来自 TCGplayer（市价）。卡名显示中文译名。",
     en: "美版卡表和价格来自 TCGplayer（市价）。卡名显示中文译名。",
@@ -276,13 +276,13 @@ async function render() {
   loadPrices();
 }
 function setIcon(B, s, el) {
-  let src = "";
+  let src = "", alt = "";
   if (s.key.includes("|") && (st.lang === "ja" || st.lang === "en")) { const idx = B.bySet.get(s.key); if (idx && idx.length) { const i = idx.reduce((a, b) => ((numOf(B.meta.items[b][2]) || 1e6) < (numOf(B.meta.items[a][2]) || 1e6) ? b : a), idx[0]); src = `https://tcgplayer-cdn.tcgplayer.com/product/${B.meta.items[i][0]}_200w.jpg`; } }
-  else if (st.lang === "zh-cn" && B.cn) { const c = B.cn.cards.find((x) => x[1] === s.i && x[5]); if (c) src = `https://storage.googleapis.com/images.pricecharting.com/${c[5]}/240.jpg`; }
+  else if (st.lang === "zh-cn" && B.cn) { const c = B.cn.cards.find((x) => x[1] === s.i && x[5]); if (c) [src, alt] = cnImgs(B.cn, B.cn.sets[s.i], c[5]); }
   else if (st.lang === "zh-tw") src = `https://assets.tcgdex.net/zh-tw/${s.code}/logo.webp`;
   if (!src) return;
   const im = document.createElement("img"); im.loading = "lazy"; im.alt = "";
-  im.onload = () => im.classList.add("ok"); im.onerror = () => im.remove(); im.src = src; el.appendChild(im);
+  im.onload = () => im.classList.add("ok"); im.onerror = () => { if (alt && im.src !== alt) im.src = alt; else im.remove(); }; im.src = src; el.appendChild(im);
 }
 
 async function setCards(B, s) {
@@ -296,7 +296,16 @@ async function setCards(B, s) {
   const jp = B.sets.find((x) => x.l === "ja" && x.name.toUpperCase().startsWith(String(s.id).toUpperCase() + ":"));
   return ((d && d.cards) || []).map((c) => twCard(c, s, jp));
 }
+// 简中卡图：官方卡图（PTCG-CHS-Datasets，300×419 PNG；列表用 wsrv.nl 缩小成 webp，不行就用原图），或 PriceCharting 的照片
+function cnImgs(cn, set, img) {
+  if (!img) return [];
+  if (set.src === "o") { const full = cn.img + img + ".png"; return [`https://wsrv.nl/?url=${encodeURIComponent(full)}&w=240&output=webp&q=82`, full]; }
+  return [`https://storage.googleapis.com/images.pricecharting.com/${img}/240.jpg`];
+}
+// 宝石包编号「01 07/09」= 第 1 组第 7 张（排序用）
+const cnKey = (num) => { const g = String(num).match(/^(\d+)\s+(\d+)\/\d+$/); return g ? +g[1] * 100 + +g[2] : numOf(num); };
 function cnCard(B, c, set) {
+  if (set.src === "o") return cnOfficial(B, c, set);
   const [id, si, num, name, variant, img, price, g9, psa10] = c;
   const o = { lang: "zh-cn", id: "pc" + id, name: zhName(B, name) + (variant ? `（${VARS[variant.toLowerCase()] ? VARS[variant.toLowerCase()].replace(/闪$/, "") : variant}）` : ""), enName: name,
     setName: set.name, setId: set.code, localId: String(num).padStart(3, "0"), num: numOf(num), rar: "", var: variant ? VARS[variant.toLowerCase()] || variant : "",
@@ -305,6 +314,19 @@ function cnCard(B, c, set) {
     graded: g9 || psa10 ? { g9, psa10 } : null };
   o.goSet = () => goSet("zh-cn", "cn|" + set.slug);
   // 其他版本：同一套同编号（普通 / 闪 / 镜面 / 印章…）
+  o.versions = async () => B.cn.cards.filter((x) => x[1] === si && numOf(x[2]) === numOf(num)).map((x) => (x === c ? o : cnCard(B, x, set)));
+  return o;
+}
+// 官方卡表的简中卡：官方卡名、稀有度、版本（精灵球 / 大师球 / 镜面…）、官图；价格是对上的 PriceCharting 价
+function cnOfficial(B, c, set) {
+  const [id, si, num, name, variant, img, price, g9, psa10, rar, pcRef, pcNum] = c;
+  const [thumb, full] = cnImgs(B.cn, set, img), std = /^\d+\/\S+$/.test(num);
+  const o = { lang: "zh-cn", id: "cn" + id, name: name + (variant ? `（${variant}）` : ""), setName: set.name, setId: set.code, localId: std ? num.split("/")[0] : num, tpNum: num,
+    num: cnKey(num), rar: rar || "", var: variant || "", img: thumb || "", img2: full || "", pcImg: full || "", image: "",
+    pcq: pcRef && set.pcSlug ? `${set.pcSlug.replace(/-/g, " ")} ${pcRef} #${pcNum}` : null, pcNum: pcNum || null,
+    rel: set.rel || null, price: price != null ? { usd: price, src: "PriceCharting" } : null, graded: g9 || psa10 ? { g9, psa10 } : null };
+  o.goSet = () => goSet("zh-cn", "cn|" + set.slug);
+  // 其他版本：同一套同编号（普通 / 精灵球 / 大师球 / 镜面）；宝石包是同一组
   o.versions = async () => B.cn.cards.filter((x) => x[1] === si && numOf(x[2]) === numOf(num)).map((x) => (x === c ? o : cnCard(B, x, set)));
   return o;
 }
@@ -337,7 +359,14 @@ async function searchCards(B) {
   if (st.lang === "zh-cn") {
     const cn = await loadCn(B);
     const want = new Set(names.map((h) => h.e.en.toLowerCase()));
-    return cn.cards.filter((c) => cn.sets[c[1]].lang === "zh-cn" && (want.size ? want.has(baseEn(c[3]).toLowerCase()) : !q.name) && (q.num == null || numOf(c[2]) === q.num))
+    // 官方卡是中文名：和词典里的简体 / 繁体名比（皮卡丘、皮卡丘ex、莉莉艾的皮皮…），词典没找到就直接看卡名里有没有输入的字
+    const zh = [...new Set(names.flatMap((h) => [h.e.hans, h.e.hant]).filter(Boolean))];
+    const raw = /[\u4e00-\u9fff]/.test(q.name || "") ? q.name.replace(/\s+/g, "") : "";
+    const SUF = /^(ex|EX|GX|V|VMAX|VSTAR|V-UNION|BREAK|\s)*$/;
+    const zhHit = (nm) => zh.some((w) => nm === w || (nm.startsWith(w) && SUF.test(nm.slice(w.length))) || nm.endsWith("的" + w) || nm.includes("的" + w + "ex")) || (raw && nm.includes(raw));
+    return cn.cards.filter((c) => { const s = cn.sets[c[1]]; if (s.lang !== "zh-cn") return false;
+        const nameOk = !q.name || (s.src === "o" ? zhHit(c[3]) : want.size && want.has(baseEn(c[3]).toLowerCase()));
+        return nameOk && (q.num == null || numOf(c[2]) === q.num); })
       .slice(0, 300).map((c) => cnCard(B, c, cn.sets[c[1]]));
   }
   // 繁中：TCGdex 按繁中名搜
@@ -438,7 +467,7 @@ function tile(c) {
     <button class="add" aria-label="加入收藏" title="加入收藏">+</button>`;
   // 图片直接放进格子（lazy 的图要在页面上才会开始下载），没有图 / 下载失败就显示「暂无图片」
   if (c.img) { const b = el.querySelector(".im"), im = document.createElement("img"); im.loading = "lazy"; im.alt = "";
-    im.onload = () => im.classList.add("ok"); im.onerror = () => { im.remove(); c.noImg = true; b.dataset.none = "1"; b.querySelector("b").textContent = "暂无图片"; }; im.src = c.img; b.appendChild(im); }
+    im.onload = () => im.classList.add("ok"); im.onerror = () => { if (c.img2 && im.src !== c.img2) { im.src = c.img2; return; } im.remove(); c.noImg = true; b.dataset.none = "1"; b.querySelector("b").textContent = "暂无图片"; }; im.src = c.img; b.appendChild(im); }
   el.onclick = (e) => { if (e.target.closest(".add")) return; ctx.openHistory(c); };
   el.querySelector(".add").onclick = () => { ctx.addToLib({ ...c, price: c.price || null }, 1); ctx.toast(`已加入收藏：${c.name}`); };
   c._el = el;
