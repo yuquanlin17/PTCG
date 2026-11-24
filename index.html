@@ -243,7 +243,7 @@ nav.bottom { position: fixed; left: 0; right: 0; bottom: 0; background: var(--su
 .site-foot #footLine { font-weight: 600; }
 .site-foot small { display: block; font-size: 11px; opacity: .8; margin-top: 2px; }
 
-nav.bottom { grid-template-columns: 1fr 1fr 1fr; }
+nav.bottom { grid-template-columns: repeat(4, 1fr); }
 nav.bottom { backdrop-filter: saturate(1.6) blur(12px); -webkit-backdrop-filter: saturate(1.6) blur(12px); background: color-mix(in srgb, var(--surface) 88%, transparent); }
 nav.bottom button { border: 0; background: transparent; padding: 8px 0 10px; font-size: 12px; color: var(--muted); font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 nav.bottom button svg { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -260,9 +260,32 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
 .sheet-bg { position: fixed; inset: 0; background: var(--shade); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
 .sheet { background: var(--surface); width: 100%; max-width: 560px; border-radius: 18px 18px 0 0; max-height: 92%; overflow-y: auto;
   padding: 16px max(16px, env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
-.sheet-head { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: start; }
-.sheet-head img, .sheet-head .ph { width: 64px; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 6px; background: var(--line); }
-.sheet-head .ph { display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.sheet-head { display: grid; grid-template-columns: 100px 1fr auto; gap: 12px; align-items: start; }
+.sheet-head img, .sheet-head .ph { width: 100px; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 7px; background: var(--line); display: block; }
+.sh-imgbtn { position: relative; border: 0; padding: 0; background: none; border-radius: 7px; }
+.sh-zoom { position: absolute; right: 4px; bottom: 4px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; line-height: 22px; }
+.sh-graded { margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+.sh-graded b { color: var(--fg); font-family: var(--mono); }
+.sh-acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 12px; }
+.sh-acts:empty { display: none; }
+.sh-acts button { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px 4px; font-size: 12.5px; font-weight: 600; line-height: 1.3; }
+.sh-acts button small { display: block; font-weight: 500; color: var(--muted); font-size: 11.5px; }
+.sh-acts button:disabled { opacity: .5; }
+.sh-vers { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0 2px; scrollbar-width: none; }
+.sh-vers::-webkit-scrollbar { display: none; }
+.sh-ver { flex: none; width: 92px; border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 5px; text-align: left; font-size: 11.5px; }
+.sh-ver[aria-current="true"] { border-color: var(--accent); }
+.sh-ver .im { aspect-ratio: 63 / 88; border-radius: 5px; overflow: hidden; background: var(--line); margin-bottom: 3px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 10.5px; position: relative; }
+.sh-ver .im img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.sh-ver .im:has(img) span { visibility: hidden; }
+.sh-ver .t { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-ver .p { font-family: var(--mono); font-weight: 700; }
+.lightbox { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.92); display: flex; align-items: center; justify-content: center; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 12px; }
+.lb-hint { position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; color: rgba(255,255,255,.6); font-size: 12.5px; }
+.sheet-head .ph { display: flex; flex-direction: column; gap: 3px; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center; }
+.sheet-head .ph b { font-family: var(--font); font-size: 12.5px; }
+.sh-imgbtn:has(.ph) .sh-zoom { display: none; }
 .sheet-close { border: 0; background: var(--bg); width: 32px; height: 32px; border-radius: 50%; font-size: 18px; color: var(--muted); }
 .sheet .big { font-family: var(--mono); font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .chg { font-family: var(--mono); font-size: 13px; font-weight: 600; }
@@ -330,6 +353,9 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
   </section>
 
   <!-- 发售日历：美版 / 日版 / 简中即将发售的商品 -->
+  <!-- 图鉴：dex.js，第一次打开时才载入 -->
+  <section id="pageDex" hidden></section>
+
   <section id="pageCal" hidden>
     <div class="cal-head"><h2>发售日历</h2><small id="calUpdated"></small></div>
     <div class="filters" role="tablist" aria-label="按版本筛选" id="calFilters"></div>
@@ -389,6 +415,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
 
 <nav class="bottom">
   <button id="navScan" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><rect x="8.5" y="7" width="7" height="10" rx="1.2"/></svg>扫描</button>
+  <button id="navDex"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="7" height="9.5" rx="1.2"/><rect x="13.5" y="4" width="7" height="9.5" rx="1.2"/><path d="M3.5 17.5h17M3.5 20.5h11"/></svg>图鉴</button>
   <button id="navCal"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14h2M14 14h2M8 17h2"/></svg>日历</button>
   <button id="navLib"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="11" height="15" rx="1.5"/><path d="M17.5 7.5l2.2.6a1.2 1.2 0 0 1 .85 1.47l-2.9 10.6"/></svg>收藏</button>
 </nav>
@@ -412,14 +439,17 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
 <div class="sheet-bg" id="sheetBg" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shName">
     <div class="sheet-head">
-      <i id="shImg"></i>
+      <button type="button" class="sh-imgbtn" id="shImgBtn" aria-label="查看大图"><i id="shImg"></i><span class="sh-zoom" aria-hidden="true">⤢</span></button>
       <div style="min-width:0">
         <div class="name" id="shName" style="font-weight:700;font-size:16px;overflow-wrap:anywhere"></div>
         <div class="sub" id="shSub" style="color:var(--muted);font-size:12.5px;overflow-wrap:anywhere"></div>
         <div><span class="big" id="shPrice"></span> <span class="chg" id="shChg"></span></div>
+        <div class="sh-graded" id="shGraded" hidden></div>
       </div>
       <button class="sheet-close" id="shClose" aria-label="关闭">×</button>
     </div>
+    <div class="sh-acts" id="shActs"></div>
+    <div class="sh-vers" id="shVers" hidden></div>
     <div class="ranges" role="group" aria-label="时间范围">
       <button data-range="month">1月</button>
       <button data-range="quarter">3月</button>
@@ -437,6 +467,9 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
     <div class="note" id="shNote"></div>
   </div>
 </div>
+
+<!-- 点卡图看大图 -->
+<div class="lightbox" id="lightbox" hidden><img id="lbImg" alt=""><div class="lb-hint">点任意处关闭</div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
@@ -555,7 +588,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "11.24b · 扫描提速";
+const APP_VERSION = "11.26 · 卡片详情";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -920,7 +953,7 @@ const LIMITLESS = "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com";
 function imgSources(x) {
   const out = [];
   if (x.pcImg) out.push(x.pcImg);
-  if (x.tpId) out.push(`https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_200w.jpg`);
+  if (x.tpId && !x.noImg) out.push(`https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_200w.jpg`);
   if (x.image) out.push(x.image + "/low.webp");
   const n = parseInt(x.localId, 10);
   if (!isNaN(n)) {
@@ -939,7 +972,7 @@ function cardImg(x) {
   const srcs = imgSources(x);
   const ph = () => {
     const d = document.createElement("div"); d.className = "ph";
-    d.innerHTML = `<b>${esc(x.setId || "")}</b><span>${esc(x.localId || "")}</span>`;
+    d.innerHTML = `<b>暂无图片</b><span>${esc(x.setId || "")} ${esc(x.localId || "")}</span>`;
     return d;
   };
   if (!srcs.length) return ph();
@@ -3296,19 +3329,93 @@ let shCard = null, shRange = store.get("ptcg.range", "quarter"), shReq = 0;
 const RANGE_NOTE = { month: "近 1 个月（每天一个点）", quarter: "近 3 个月（每 3 天一个点）", annual: "近 1 年（每周一个点）", y3: "近 3 年（每月一个点）", y5: "近 5 年（每月一个点）", all: "能查到的全部（每月一个点）" };
 const RANGE_DAYS = { month: 31, quarter: 92, annual: 366, y3: 1096, y5: 1827, all: 99999 };
 const LONG_RANGE = new Set(["y3", "y5", "all"]);
+// 大图：TCGplayer 1000 像素、PriceCharting 1600、TCGdex high
+function hiresOf(x) {
+  if (x.tpId && !x.noImg) return `https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_in_1000x1000.jpg`;
+  if (x.pcImg) return x.pcImg.replace(/\/\d+\.jpg$/, "/1600.jpg");
+  if (x.image) return x.image + "/high.webp";
+  return "";
+}
+function openLightbox(src, fallback) {
+  const im = $("lbImg");
+  im.onerror = () => { if (fallback && im.src !== fallback) im.src = fallback; };
+  im.src = src || fallback; $("lightbox").hidden = false;
+}
+$("lightbox").onclick = () => { $("lightbox").hidden = true; $("lbImg").removeAttribute("src"); };
+let verReq = 0;
 function openHistory(x) {
   shCard = x;
   const im = cardImg(x); im.id = "shImg"; $("shImg").replaceWith(im);
-  $("shName").innerHTML = `<span class="lang-pill">${LANGS[x.lang]}</span> ${esc(x.name)}`;
-  $("shSub").textContent = `${x.setName || ""} · ${x.abbr || x.setId || ""} ${x.localId || ""}${numTail(x)}`;
-  const usd = x.price && typeof x.price === "object" ? x.price.usd : x.price;
-  $("shPrice").textContent = usd != null ? fmt(usd) : "暂无价格";
-  if (usd != null) $("shPrice").dataset.usd = usd; else delete $("shPrice").dataset.usd;
+  // 没有卡图（占位）就不放大
+  $("shImgBtn").onclick = () => { const cur = $("shImg"); if (!cur || cur.tagName !== "IMG") return; openLightbox(hiresOf(x), cur.src); };
+  $("shName").innerHTML = `<span class="lang-pill" data-l="${x.lang}">${LANGS[x.lang]}</span> ${esc(x.name)}`;
+  const code = x.abbr || x.setId || "";
+  $("shSub").textContent = `${x.setName || ""}${code && code !== x.setName ? " · " + code : ""} · ${x.localId || ""}${numTail(x)}${x.rar ? " · " + x.rar : ""}`;
+  let usd = x.price && typeof x.price === "object" ? x.price.usd : x.price;
+  const showPrice = () => {
+    usd = x.price && typeof x.price === "object" ? x.price.usd : x.price;
+    $("shPrice").textContent = usd != null ? fmt(usd) : x.price === undefined && x.loadPrices ? "查价格中…" : "暂无价格";
+    if (usd != null) $("shPrice").dataset.usd = usd; else delete $("shPrice").dataset.usd;
+  };
+  showPrice();
   $("shChg").textContent = "";
+  // 图鉴里点开时这张卡的价格可能还没查到：单独查一下
+  if (x.price === undefined && x.loadPrices) x.loadPrices([x]).then(() => { if (shCard === x && !$("shPrice").dataset.usd) showPrice(); }, () => {});
+  // 评级价参考（PriceCharting 有的：简中卡）
+  const gr = x.graded || {}, gEl = $("shGraded");
+  gEl.hidden = !(gr.g9 || gr.psa10);
+  gEl.innerHTML = gEl.hidden ? "" : `评级参考 · Grade 9 <b data-usd="${gr.g9 || ""}">${gr.g9 ? fmt(gr.g9) : "—"}</b> · PSA 10 <b data-usd="${gr.psa10 || ""}">${gr.psa10 ? fmt(gr.psa10) : "—"}</b>`;
+  // 三个按钮：查看系列 / 其他版本 / 加入收藏
+  const acts = $("shActs"); acts.innerHTML = ""; $("shVers").hidden = true; $("shVers").innerHTML = "";
+  const btn = (html, fn) => { const b = document.createElement("button"); b.type = "button"; b.innerHTML = html; b.onclick = fn; acts.appendChild(b); return b; };
+  if (x.goSet) btn(`查看系列 ▸<small>${esc(x.setId || x.setName || "")}</small>`, () => { closeHistory(); x.goSet(); });
+  if (x.versions) {
+    const my = ++verReq;
+    const vb = btn(`其他版本 ▸<small>查找中…</small>`, () => { const v = $("shVers"); v.hidden = !v.hidden; });
+    vb.disabled = true;
+    x.versions().then((list) => {
+      if (my !== verReq || shCard !== x) return;
+      vb.innerHTML = `共 ${list.length} 个版本 ▸<small>${list.length > 1 ? "切换版本" : "只有这一个"}</small>`;
+      vb.disabled = list.length < 2;
+      const tiles = renderVersions(x, list);
+      // 其他版本的价格随后补上
+      if (x.loadPrices) x.loadPrices(list).then(() => {
+        if (shCard !== x) return;
+        for (const [v, el] of tiles) { const u = v.price && v.price.usd; if (u != null) { el.dataset.usd = u; el.textContent = fmt(u); } }
+      }, () => {});
+    }).catch(() => { if (my === verReq) { vb.innerHTML = "其他版本<small>暂时查不到</small>"; } });
+  }
+  const inLib = () => lib.find((y) => y.key === keyOf(x.lang, x.id));
+  const ab = btn("", () => { const e = inLib(); if (e) e.qty++; else addToLib({ ...x, price: x.price && typeof x.price === "object" ? x.price : usd != null ? { usd, src: "" } : null }, 1); saveLib(); toast("已加入收藏"); setAdd(); });
+  const setAdd = () => { const e = inLib(); ab.innerHTML = e ? `已收藏 ×${e.qty}<small>再加 1 张</small>` : `加入收藏<small>记到收藏页</small>`; };
+  setAdd();
   $("sheetBg").hidden = false; document.body.style.overflow = "hidden";
   loadHistory();
 }
-function closeHistory() { $("sheetBg").hidden = true; document.body.style.overflow = ""; shCard = null; shReq++; }
+// 版本：同一张卡图的日版 / 美版 / 球纹 / 复刻…，点一下切过去
+function renderVersions(cur, list) {
+  const box = $("shVers"); box.innerHTML = ""; const tiles = [];
+  for (const v of list) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "sh-ver";
+    if (v.id === cur.id) b.setAttribute("aria-current", "true");
+    const usd = v.price && v.price.usd;
+    b.innerHTML = `<div class="im"><span>暂无图片</span></div><div><span class="lang-pill" data-l="${v.lang}">${LANGS[v.lang]}</span></div>
+      <div class="t">${esc(v.setId || "")} ${esc(v.localId || "")}${v.var ? " " + esc(v.var) : ""}</div><div class="p"${usd != null ? ` data-usd="${usd}"` : ""}>${usd != null ? fmt(usd) : v.price === undefined ? "…" : "—"}</div>`;
+    const src = v.img || imgSources(v)[0];
+    if (src) { const im = document.createElement("img"); im.alt = ""; im.loading = "lazy"; im.onerror = () => im.remove(); im.src = src; b.querySelector(".im").appendChild(im); }
+    b.onclick = () => { if (v.id !== cur.id) openHistory(v); };
+    box.appendChild(b); tiles.push([v, b.querySelector(".p")]);
+  }
+  return tiles;
+}
+function closeHistory() { $("sheetBg").hidden = true; document.body.style.overflow = ""; shCard = null; shReq++; verReq++; }
+// 图鉴「其他版本」用：只要卡图库的特征（vec.bin），不用下载识别模型
+let vecIdx = null;
+function getVecIndex() {
+  if (visIndex) return Promise.resolve(visIndex);
+  if (!vecIdx) vecIdx = import("./vis.js").then((m) => m.loadIndex("./vis/")).catch((e) => { vecIdx = null; throw e; });
+  return vecIdx;
+}
 function refreshSheet() { if (shCard && !$("sheetBg").hidden) loadHistory(); }
 async function loadHistory() {
   const x = shCard, my = ++shReq, chart = $("shChart");
@@ -3431,7 +3538,7 @@ function makeClickable(el, x) {
 
 // ---------- 导航 ----------
 function go(page) {
-  const pages = { scan: ["pageScan", "navScan"], cal: ["pageCal", "navCal"], lib: ["pageLib", "navLib"] };
+  const pages = { scan: ["pageScan", "navScan"], dex: ["pageDex", "navDex"], cal: ["pageCal", "navCal"], lib: ["pageLib", "navLib"] };
   for (const [k, [sec, nav]] of Object.entries(pages)) {
     $(sec).hidden = k !== page;
     if (k === page) $(nav).setAttribute("aria-current", "page"); else $(nav).removeAttribute("aria-current");
@@ -3439,9 +3546,12 @@ function go(page) {
   if (page !== "scan") stopScan();
   if (page === "lib") { renderLib(); refreshAll(false); }
   if (page === "cal") openCalendar();
+  if (page === "dex") import("./dex.js").then((m) => m.initDex({ $, esc, fmt, getJSON, proxyUrl, openHistory, addToLib, toast, store, searchLib, getVecIndex, go }))
+    .catch((e) => { $("pageDex").innerHTML = `<div class="empty">图鉴载入失败：${esc(e.message)}</div>`; });
 }
 $("navScan").onclick = () => go("scan");
 $("navCal").onclick = () => go("cal");
+$("navDex").onclick = () => go("dex");
 $("navLib").onclick = () => go("lib");
 
 // ---------- 发售日历 ----------
