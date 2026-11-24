@@ -98,7 +98,12 @@ async function findByName(v) {
   }
   return null;
 }
-const todo = Object.entries(noimg).filter(([, v]) => v.length >= 6 && v[0].startsWith("ja|"));
+// 卡图地址记在 vis/img.json（商品号 → 官网卡图网址），图鉴和扫描结果显示卡图用
+const IMGF = F("vis/img.json");
+const imgRef = fs.existsSync(IMGF) ? JSON.parse(fs.readFileSync(IMGF, "utf8")) : {};
+// REFIND=文件：以前补过（只算了特征、没记网址）的卡，重新找一次官网卡图网址，只更新 img.json
+const REFIND = process.env.REFIND ? JSON.parse(fs.readFileSync(process.env.REFIND, "utf8")) : null;
+const todo = Object.entries(REFIND || noimg).filter(([, v]) => v.length >= 6 && v[0].startsWith("ja|"));
 console.log(`日版没有卡图：${todo.length} 张`);
 const bySet = new Map();
 for (const [pid, v] of LIMIT ? todo.slice(0, LIMIT) : todo) { if (!bySet.has(v[0])) bySet.set(v[0], []); bySet.get(v[0]).push([pid, v]); }
@@ -140,6 +145,12 @@ for (const [key, list] of bySet) {
 }
 console.log(`找到 ${found.length} 张`);
 if (process.env.DRY) { fs.writeFileSync(process.env.DRY, JSON.stringify(found, null, 1)); process.exit(0); }
+if (REFIND) {
+  for (const c of found) imgRef[c.pid] = c.img;
+  fs.writeFileSync(IMGF, JSON.stringify(imgRef));
+  console.log(`官网卡图网址：记下 ${found.length} 张`);
+  process.exit(0);
+}
 if (!found.length) process.exit(0);
 
 // ---------- 算特征（无界面 Chrome，网页同一份 vis.js；图片在这边下载好再交给网页，避免跨域） ----------
@@ -173,6 +184,7 @@ for (const c of found) {
   meta.items.push([c.pid, setIdx.get(c.key), c.n, stripNo(c.name), c.r, c.rel || ""]);
   add.push(Buffer.from(Int8Array.from(v).buffer));
   delete noimg[c.pid];
+  imgRef[c.pid] = c.img;
   ok++;
   if (ok % 50 === 0) console.log(`  已算 ${ok}/${found.length}`);
   await sleep(150);
@@ -182,4 +194,5 @@ vecAll = Buffer.concat([vecAll, ...add]);
 fs.writeFileSync(F("vis/vec.bin"), vecAll);
 fs.writeFileSync(F("vis/meta.json"), JSON.stringify(meta));
 fs.writeFileSync(F("vis/noimg.json"), JSON.stringify(noimg));
+fs.writeFileSync(IMGF, JSON.stringify(imgRef));
 console.log(`卡图库：用官网卡图补了 ${ok} 张，共 ${meta.items.length} 张；还没有卡图 ${Object.keys(noimg).length} 张`);

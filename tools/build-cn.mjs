@@ -106,14 +106,16 @@ const PB = /^(poke ?ball|reverse( holo)?)$/i, MB = /^(m(a|s)?s?ter ?ball|masterb
 if (ds && ds.collections) {
   // PriceCharting 的卡按「系列代码 | 编号」分组（151 的旅 / 望 / 惊 / 聚四个盒子都对到 PriceCharting 的 151C）
   const pcBy = new Map(), pcSet = new Map();
-  sets.forEach((s, i) => { if (s.lang === "zh-cn") pcSet.set(s.code.toUpperCase(), i); });
+  // 代码比的时候去掉点（PriceCharting 的 CSM21C = 官方 CSM2.1C）
+  const cc = (c) => String(c).toUpperCase().replace(/\./g, "");
+  sets.forEach((s, i) => { if (s.lang === "zh-cn") pcSet.set(cc(s.code), i); });
   for (const c of cards) { const k = c[1] + "|" + numOf(c[2]); if (!pcBy.has(k)) pcBy.set(k, []); pcBy.get(k).push(c); }
   const used = new Set();
   const kindOf = (col) => col.goodsType === "1" ? "pack" : col.goodsType === "2" ? "deck" : /PROMO|MISSION|-P-|ML\d|GIFT|EVENT/i.test(col.commodityCode) ? "promo" : "deck";
   let matched = 0, total = 0;
   for (const col of ds.collections) {
     const code = String(col.commodityCode).trim();
-    const pcI = pcSet.get(code.toUpperCase()) ?? (/^151C\d$/i.test(code) ? pcSet.get("151C") : undefined);
+    const pcI = pcSet.get(cc(code)) ?? (/^151C\d$/i.test(code) ? pcSet.get("151C") : undefined);
     const si = out.sets.length;
     // 有 ★★ 的系列：★ = 精灵球、★★ = 大师球；只有 ★ 的（老系列）：★ = 镜面
     const balls = col.cards.some((k) => k.details && k.details.special_shiny_type === 2);
@@ -141,9 +143,9 @@ if (ds && ds.collections) {
   }
   console.log(`官方卡表：${ds.collections.length} 个商品，${total} 张；对上 PriceCharting 价格 ${matched} 张`);
   // PriceCharting 独有的简中系列（官方卡表里没有的）和繁中系列照旧
-  const offSet = new Set(ds.collections.map((c) => String(c.commodityCode).trim().toUpperCase()));
+  const offSet = new Set(ds.collections.map((c) => cc(String(c.commodityCode).trim())));
   sets.forEach((s, i) => {
-    if (s.lang === "zh-cn" && (offSet.has(s.code.toUpperCase()) || (s.code === "151C" && offSet.has("151C1")))) return;
+    if (s.lang === "zh-cn" && (offSet.has(cc(s.code)) || (s.code === "151C" && offSet.has("151C1")))) return;
     const si = out.sets.length; out.sets.push({ ...s, src: "pc" });
     for (const c of cards) if (c[1] === i) out.cards.push([c[0], si, ...c.slice(2, 9)]);
   });
