@@ -4,7 +4,7 @@
 // index.html 把要用的函数（价格格式、卡片详情、加入收藏…）通过 initDex(ctx) 传进来。
 
 let ctx = null, root = null, base = null;
-const st = { lang: "ja", kind: "pack", set: null, sort: "num-asc", rar: new Set(), q: "", shown: 0 };
+const st = { lang: "ja", kind: "pack", set: null, sort: "num-asc", rar: new Set(), q: "", shown: 0, hideVar: false };
 const PAGE = 60;
 const LANGS = { "zh-cn": "简中", "zh-tw": "繁中", ja: "日版", en: "美版" };
 const CN_ORDER = { "30thC": "2026-10", CBB7C: "2026-10", CBB6C: "2026-08", CSV10C: "2026-08", "151C": "2025-01" };
@@ -36,6 +36,11 @@ const CSS = `
 .dex-set .ic { width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 4px; overflow: hidden; background: var(--surface); border: 2px solid var(--line); display: flex; align-items: center; justify-content: center; position: relative; }
 .dex-set .ic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 22%; transform: scale(1.6); opacity: 0; }
 .dex-set .ic b { font-size: 11px; color: var(--muted); }
+.dex-set .ic.pk { background: #fff; }
+.dex-set .ic.pk b { display: none; }
+.dex-set .ic.pk img { object-fit: contain; object-position: center; transform: none; padding: 5px; }
+.dex-hv { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--fg); white-space: nowrap; user-select: none; }
+.dex-hv input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
 .dex-set[aria-pressed="true"] .ic { border-color: var(--accent); }
 .dex-set .nm { font-size: 12px; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .dex-set[aria-pressed="true"] .nm { color: var(--accent); }
@@ -86,7 +91,8 @@ function build() {
     <div class="dex-kinds" data-kinds></div>
     <div class="dex-sets" data-sets></div>
     <div data-head></div>
-    <div class="dex-tools"><span data-count></span><span style="display:flex;gap:6px">
+    <div class="dex-tools"><span style="display:flex;flex-direction:column;gap:3px;min-width:0"><span data-count></span>
+      <label class="dex-hv"><input type="checkbox" data-hv>隐藏特殊版本</label></span><span style="display:flex;gap:6px">
       <select data-sort aria-label="排序"></select><button type="button" data-filt>筛选</button></span></div>
     <div class="dex-filter" data-filter hidden></div>
     <div class="dex-grid" data-grid></div>
@@ -96,6 +102,10 @@ function build() {
   root.querySelector("form").onsubmit = (e) => { e.preventDefault(); st.q = root.querySelector("input").value.trim(); st.rar.clear(); root.querySelector("input").blur(); render(); };
   root.querySelector("input").oninput = (e) => { if (!e.target.value.trim() && st.q) { st.q = ""; render(); } };
   root.querySelector("[data-sort]").onchange = (e) => { st.sort = e.target.value; showCards(); };
+  // 隐藏特殊版本（大师球 / 精灵球 / 镜面 / 反闪 / 宇宙闪…），记住选择
+  st.hideVar = !!ctx.store.get("ptcg.dexHideVar", false);
+  const hv = root.querySelector("[data-hv]"); hv.checked = st.hideVar;
+  hv.onchange = () => { st.hideVar = hv.checked; ctx.store.set("ptcg.dexHideVar", st.hideVar); buildFilter(); showCards(); };
   root.querySelector("[data-filt]").onclick = () => { const f = root.querySelector("[data-filter]"); f.hidden = !f.hidden; };
   root.querySelector("[data-more]").onclick = () => paint(false);
 }
@@ -164,22 +174,29 @@ function setPrices(slug, line) {
 async function setList(B) {
   if (st.lang === "ja" || st.lang === "en") {
     const tw = st.lang === "ja" ? await loadTw(B).catch(() => []) : [];
+    // 美版没有商品图的系列用 TCGdex 的系列 logo
+    const enLogo = new Map();
+    if (st.lang === "en") for (const x of (await tdx("https://api.tcgdex.net/v2/en/sets").catch(() => [])) || []) if (x.logo) enLogo.set(baseSet(x.name), x.logo + ".webp");
     const twName = new Map(tw.map((s) => [String(s.id).toUpperCase(), s.name]));
     return B.sets.filter((s) => s.l === st.lang && B.bySet.has(s.l + "|" + s.name)).map((s) => {
       const code = s.name.includes(":") ? s.name.split(":")[0].trim() : "";
-      return { key: s.l + "|" + s.name, name: twName.get(code.toUpperCase()) || (s.name.includes(":") ? s.name.split(":").slice(1).join(":").trim() : s.name), code: code || s.name, rel: s.rel, kind: s.kind, slug: s.slug };
+      return { key: s.l + "|" + s.name, name: twName.get(code.toUpperCase()) || (s.name.includes(":") ? s.name.split(":").slice(1).join(":").trim() : s.name), code: code || s.name, rel: s.rel, kind: s.kind, slug: s.slug,
+        pic: s.pack ? `https://tcgplayer-cdn.tcgplayer.com/product/${s.pack}_200w.jpg` : enLogo.get(baseSet(s.name)) || "" };
     });
   }
   if (st.lang === "zh-cn") {
     const cn = await loadCn(B);
-    return cn.sets.map((s, i) => ({ ...s, i })).filter((s) => s.lang === "zh-cn").map((s) => ({ key: "cn|" + s.slug, name: s.name, code: s.code, rel: s.rel, kind: s.kind || (/promo/i.test(s.slug) ? "promo" : "pack"), i: s.i }))
+    return cn.sets.map((s, i) => ({ ...s, i })).filter((s) => s.lang === "zh-cn").map((s) => ({ key: "cn|" + s.slug, name: s.name, code: s.code, rel: s.rel, kind: s.kind || (/promo/i.test(s.slug) ? "promo" : "pack"), i: s.i,
+        pic: s.cover ? cn.img + s.cover + ".png" : "" }))
       // 排新旧：TCGdex 没写发售日的几套按大概时间排（只用来排序，不显示）；其他没日期的零散系列排最后
       .sort((a, b) => (b.rel || CN_ORDER[b.code] || "0").localeCompare(a.rel || CN_ORDER[a.code] || "0"));
   }
   const tw = await loadTw(B);
   // 繁中系列的发售时间：用同代码日版系列的（TCGdex 繁中系列表没写日期），用来排新旧
   const jpRel = new Map(B.sets.filter((x) => x.l === "ja" && x.name.includes(":")).map((x) => [x.name.split(":")[0].trim().toUpperCase(), x.rel]));
-  return tw.map((s) => ({ key: "tw|" + s.id, name: s.name, code: s.id, rel: jpRel.get(String(s.id).toUpperCase()) || "", kind: /-P$/i.test(s.id) ? "promo" : /組合|牌組|禮盒|起始|特別組合|高級|對戰組合/.test(s.name) ? "deck" : "pack", id: s.id })).sort((a, b) => (b.rel || "").localeCompare(a.rel || ""));
+  // 繁中系列图：同代码日版的补充包图
+  const jpPack = new Map(B.sets.filter((x) => x.l === "ja" && x.pack && x.name.includes(":")).map((x) => [x.name.split(":")[0].trim().toUpperCase(), x.pack]));
+  return tw.map((s) => ({ key: "tw|" + s.id, name: s.name, code: s.id, rel: jpRel.get(String(s.id).toUpperCase()) || "", pic: jpPack.has(String(s.id).toUpperCase()) ? `https://tcgplayer-cdn.tcgplayer.com/product/${jpPack.get(String(s.id).toUpperCase())}_200w.jpg` : "", kind: /-P$/i.test(s.id) ? "promo" : /組合|牌組|禮盒|起始|特別組合|高級|對戰組合/.test(s.name) ? "deck" : "pack", id: s.id })).sort((a, b) => (b.rel || "").localeCompare(a.rel || ""));
 }
 
 // ---------- 一张卡 = 一个对象（tile 显示 + 点开看价格曲线 + 加入收藏） ----------
@@ -275,8 +292,18 @@ async function render() {
   showCards();
   loadPrices();
 }
+const baseSet = (n) => String(n || "").replace(/^[^:]*:\s*/, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 function setIcon(B, s, el) {
   let src = "", alt = "";
+  // 有系列图（补充包 / 礼盒商品图、系列 logo）就用它，没有再用这套第一张卡
+  if (s.pic) {
+    el.classList.add("pk");
+    const big = s.pic.includes("PTCG-CHS"), im = document.createElement("img"); im.loading = "lazy"; im.alt = "";
+    im.onload = () => im.classList.add("ok");
+    im.onerror = () => { if (big && im.src !== s.pic) im.src = s.pic; else { im.remove(); el.classList.remove("pk"); s.pic = ""; setIcon(B, s, el); } };
+    im.src = big ? `https://wsrv.nl/?url=${encodeURIComponent(s.pic)}&w=140&output=webp` : s.pic; el.appendChild(im);
+    return;
+  }
   if (s.key.includes("|") && (st.lang === "ja" || st.lang === "en")) { const idx = B.bySet.get(s.key); if (idx && idx.length) { const i = idx.reduce((a, b) => ((numOf(B.meta.items[b][2]) || 1e6) < (numOf(B.meta.items[a][2]) || 1e6) ? b : a), idx[0]); src = `https://tcgplayer-cdn.tcgplayer.com/product/${B.meta.items[i][0]}_200w.jpg`; } }
   else if (st.lang === "zh-cn" && B.cn) { const c = B.cn.cards.find((x) => x[1] === s.i && x[5]); if (c) [src, alt] = cnImgs(B.cn, B.cn.sets[s.i], c[5]); }
   else if (st.lang === "zh-tw") src = `https://assets.tcgdex.net/zh-tw/${s.code}/logo.webp`;
@@ -426,7 +453,7 @@ function updatePrices(cards) {
 const rarKey = (c) => (c.rar && c.var ? `${c.rar}(${c.var})` : c.rar || c.var || "");
 function buildFilter() {
   const f = root.querySelector("[data-filter]"), cnt = new Map();
-  for (const c of curCards) { const k = rarKey(c); if (k) cnt.set(k, (cnt.get(k) || 0) + 1); }
+  for (const c of curCards.filter(keepVar)) { const k = rarKey(c); if (k) cnt.set(k, (cnt.get(k) || 0) + 1); }
   const order = ["SAR", "SIR", "MUR", "UR", "HR", "SR", "AR", "IR", "CHR", "CSR", "RRR", "RR", "SSR", "SUR", "S", "ACE", "K", "A", "R", "U", "C", "PR", "BWR", "MA", "CC", "TR"];
   const keys = [...cnt.keys()].sort((a, b) => { const ia = order.indexOf(a.split("(")[0]), ib = order.indexOf(b.split("(")[0]); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); });
   f.innerHTML = keys.length ? keys.map((k) => `<button data-r="${ctx.esc(k)}" aria-pressed="${st.rar.has(k)}">${ctx.esc(k)}<small>${cnt.get(k)}种</small></button>`).join("") + `<button data-reset>重置</button>` : `<span class="dex-note" style="margin:0">这套卡没有稀有度资料</span>`;
@@ -434,8 +461,9 @@ function buildFilter() {
   const rs = f.querySelector("[data-reset]"); if (rs) rs.onclick = () => { st.rar.clear(); buildFilter(); showCards(); };
 }
 let viewCards = [];
+const keepVar = (c) => !st.hideVar || !c.var;
 function showCards() {
-  let list = curCards.filter((c) => !st.rar.size || st.rar.has(rarKey(c)));
+  let list = curCards.filter((c) => keepVar(c) && (!st.rar.size || st.rar.has(rarKey(c))));
   const pr = (c) => (c.price && c.price.usd != null ? c.price.usd : null);
   const cmp = {
     "num-asc": (a, b) => (a.num || 1e6) - (b.num || 1e6), "num-desc": (a, b) => b.num - a.num,
@@ -444,7 +472,7 @@ function showCards() {
   }[st.sort];
   list = list.slice().sort(cmp);
   viewCards = list;
-  root.querySelector("[data-count]").textContent = st.q ? `「${st.q}」：${list.length >= 300 ? "300+" : list.length} 张` : `${list.length} 张${st.rar.size ? "（已筛选）" : ""}`;
+  root.querySelector("[data-count]").textContent = st.q ? `「${st.q}」：${list.length >= 300 ? "300+" : list.length} 张` : `${list.length} 张${st.rar.size ? "（已筛选）" : ""}${st.hideVar && list.length < curCards.length && !st.rar.size ? `（另有 ${curCards.length - list.length} 张特殊版本）` : ""}`;
   root.querySelector("[data-filt]").dataset.on = st.rar.size ? "1" : "0";
   st.shown = 0;
   root.querySelector("[data-grid]").innerHTML = list.length ? "" : `<div class="dex-note" style="grid-column:1/-1">${st.q ? "没找到。试试别的写法（中文、拼音、英文名），或者换个版本。" : "这套卡还没有资料。"}</div>`;
