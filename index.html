@@ -555,7 +555,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "11.24 · 真正框住卡片";
+const APP_VERSION = "11.24b · 扫描提速";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -1882,22 +1882,28 @@ async function startScan(opts = {}) {
       // 要你选的时候：先存几帧画面再关相机，候选马上列出来，后台接着读卡底，读出来自动选好
       const shots = await snapFrames(pick.sure ? 1 : 3);
       const hints = recent.slice();
-      // 拿不准（要你选 / 在猜）：和最像的几张分别对齐，对得上的那张拉正了再认一次，常常就确定了
+      // 拿不准（要你选 / 在猜）：和最像的几张分别对齐，对得上的那张拉正了再认一次，常常就确定了（最多等 2.5 秒）
       if (shots.length && !pick.sure) {
         $("visPeek").hidden = false; $("visPeek").textContent = "正在核对是哪张卡…";
-        const v2 = await verifyByAlign(r, shots[0].c, hints).catch(() => null);
+        const v2 = await withTimeout(verifyByAlign(r, shots[0].c, hints), 2500).catch(() => null);
         if (v2) { r = v2.r; pick = v2.pick; }
       }
-      // 还没找到卡的四个角（比如第一帧就认出来了）：在存下的画面上对齐一次，绿框才框得准
-      if (shots.length && !track.quad) await trackCard((pick.list[0] || r.best).p, shots[0].c, true);
       await visShow(r, true, hints, pick, pick.sure ? null : () => startScan({ noGuess: true }));
-      finishScan();
+      finishScan(); // 结果马上出来、定格、滴一声，不等找框
+      const sess = loopId;
       if (shots.length > 1 && r.shown && r.shown.length > 1) bgResolve(shots, r.shown, hints);
-      // 后台看卡面文字核对语言（日版 / 繁中 / 简中 / 美版同图时）；找到了四个角就用拉正的高清卡图读
-      if (shots.length) lastCardShot = track.quad ? { c: vis.quadCanvas(shots[0].c, track.quad, 630, 880), g: { gx: 0, gy: 0, gw: 630, gh: 880 } }
-        : (() => { const { c, g } = shots[0], i = r.inset || 0; return { c, g: { gx: g.gx + g.gw * i, gy: g.gy + g.gh * i, gw: g.gw * (1 - 2 * i), gh: g.gh * (1 - 2 * i) } }; })();
-      if (lastCardShot && r.shown && r.shown.length === 1) langCheck(lastCardShot.c, lastCardShot.g);
-      else if (lastCardShot && r.shown && r.shown.length > 1 && !pick.guess) langPick(r.shown, lastCardShot);
+      if (!shots.length) return;
+      // 后台：在定格的画面上找卡的四个角画绿框（不挡着结果）；找到了就用拉正的高清卡图核对语言
+      (async () => {
+        if (!track.quad) await withTimeout(trackCard((pick.list[0] || r.best).p, shots[0].c, true, shots[0].g), 3000).catch(() => false);
+        const still = loopId === sess && !$("preview").hidden; // 还没开始扫下一张
+        if (still && track.quad) showLockQuad(track.quad, "hit");
+        lastCardShot = track.quad ? { c: vis.quadCanvas(shots[0].c, track.quad, 630, 880), g: { gx: 0, gy: 0, gw: 630, gh: 880 } }
+          : (() => { const { c, g } = shots[0], i = r.inset || 0; return { c, g: { gx: g.gx + g.gw * i, gy: g.gy + g.gh * i, gw: g.gw * (1 - 2 * i), gh: g.gh * (1 - 2 * i) } }; })();
+        if (loopId !== sess) return;
+        if (r.shown && r.shown.length === 1) langCheck(lastCardShot.c, lastCardShot.g);
+        else if (r.shown && r.shown.length > 1 && !pick.guess) langPick(r.shown, lastCardShot);
+      })();
     };
     while (scanning && my === loopId) {
       if (fam) {
@@ -1917,17 +1923,8 @@ async function startScan(opts = {}) {
       } catch {}
       if (!scanning || my !== loopId) return;
       if (!r) { await sleep(200); continue; }
-      // 画面里像是有张卡：找出它真正的四个角（有显卡加速时每隔一会儿做一次），框住它；
-      // 再把卡「拉正」比对一次，比引导框裁出来的更准（日版 / 美版同图时也更分得清）
-      if (r.best.sim >= 0.58) {
-        if (gpu && Date.now() - track.at > 250) await trackCard(r.best.p);
-        if (!scanning || my !== loopId) return;
-        if (track.quad) {
-          showLockQuad(track.quad, "track");
-          try { const rq = await visDecide(vis.quadCanvas($("video"), track.quad)); rq.quad = track.quad; if (rq.best.sim > r.best.sim) r = rq; } catch {}
-        } else showLock(0, "off");
-        lockInset = r.inset || 0;
-      } else { showLock(0, "off"); if (track.miss++ > 3) resetTrack(); }
+      // 扫描中不找四个角（每帧多算两次模型会慢好几倍）；认出来以后在定格的画面上找一次，画框
+      lockInset = r.inset || 0;
       firstAt = firstAt || Date.now();
       const zhcn = recent.some((p) => p.tokens.some((t) => ZH_CODE.test(t)));
       // 1.5 秒内两次认出同一张卡图才算（中间夹着没认出的帧也没关系），一次就非常确定的直接算
@@ -2163,7 +2160,7 @@ async function startScan(opts = {}) {
 }
 // 认出来了：关掉相机，让手机歇一歇；点「扫下一张」再打开
 // 认出来：定格画面、绿框框住卡、滴一声（静音模式下 iPhone 不出声）、能震动的手机震一下
-let lockInset = 0, actx = null, lastCardShot = null;
+let lockInset = 0, actx = null, lastCardShot = null, frozenDims = { w: 0, h: 0 };
 function unlockAudio() {
   try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume(); } catch {}
 }
@@ -2179,9 +2176,10 @@ function beep() {
 // 框：画在卡片真正的四个角上（视频像素坐标 → 画面上的位置；视频是 object-fit: cover）
 function showLockQuad(q, state) {
   const el = $("lock"), v = $("video"), vf = $("vf");
+  const vw = v.videoWidth || frozenDims.w, vh = v.videoHeight || frozenDims.h; // 相机关掉以后用定格画面的大小
   // 注意：SVG 元素没有 .hidden 属性，要直接改 hidden 这个 attribute
-  if (state === "off" || !q || !v.videoWidth) { el.setAttribute("hidden", ""); return; }
-  const box = vf.getBoundingClientRect(), vw = v.videoWidth, vh = v.videoHeight;
+  if (state === "off" || !q || !vw) { el.setAttribute("hidden", ""); return; }
+  const box = vf.getBoundingClientRect();
   const sc = Math.max(box.width / vw, box.height / vh), ox = (vw * sc - box.width) / 2, oy = (vh * sc - box.height) / 2;
   const pts = q.map(([x, y]) => [x * sc - ox, y * sc - oy]);
   el.querySelector("polygon").setAttribute("points", pts.map((p) => p.map((n) => n.toFixed(1)).join(",")).join(" "));
@@ -2210,16 +2208,17 @@ function refImage(id) {
   return refImgs.get(id);
 }
 // src：视频或存下的帧（和视频同样大小）。返回 true = 找到了四个角（track.quad）
-async function trackCard(p, src = $("video"), force = false) {
+// g：引导框在画面里的位置（相机关掉以后引导框藏起来就量不到了，所以用存画面那一刻记下的）
+async function trackCard(p, src = $("video"), force = false, g = guideGeom()) {
   if (!vis || !p || (track.busy && !force)) return !!track.quad;
   track.busy = true;
   try {
-    const g = guideGeom(); if (!g) return false;
-    const rf = await vis.refFeats(p.id, await refImage(p.id));
+    if (!g || !g.gw) return false;
+    const rf = await vis.refFeats(p.id, await withTimeout(refImage(p.id), 2500));
     const cx = g.gx + g.gw / 2, cy = g.gy + g.gh / 2, side = g.gh * 1.2;
     const a = await vis.alignCard(vis.frameSquare(src, cx, cy, side), rf);
-    if (a) {
-      const q = a.quad.map(([x, y]) => [cx - side / 2 + (x * side) / 256, cy - side / 2 + (y * side) / 256]);
+    const q = a && a.quad.map(([x, y]) => [cx - side / 2 + (x * side) / 256, cy - side / 2 + (y * side) / 256]);
+    if (q && quadOk(q, g, a)) {
       // 同一张卡：和上一次的位置平滑一下，框不会抖
       track.quad = track.id === p.id && track.quad ? q.map((pt, i) => [pt[0] * 0.6 + track.quad[i][0] * 0.4, pt[1] * 0.6 + track.quad[i][1] * 0.4]) : q;
       track.id = p.id; track.miss = 0;
@@ -2229,6 +2228,14 @@ async function trackCard(p, src = $("video"), force = false) {
   return !!track.quad;
 }
 const resetTrack = () => { track.id = null; track.quad = null; track.miss = 0; };
+// 找到的四个角靠不靠谱：配对够多、大小和引导框差不多（卡在框里）、歪得不离谱；不靠谱就不画框（宁可不画，不画错）
+function quadOk(q, g, a) {
+  if (!a || a.inliers < 14 || a.inliers < a.pairs * 0.35) return false;
+  const w = (Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]) + Math.hypot(q[2][0] - q[3][0], q[2][1] - q[3][1])) / 2;
+  const ang = Math.abs(Math.atan2(q[1][1] - q[0][1], q[1][0] - q[0][0])) * 180 / Math.PI;
+  return w > g.gw * 0.3 && w < g.gw * 1.15 && ang < 35;
+}
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timeout")), ms))]);
 // 拿不准是哪张时：把画面和最像的几张（不同的卡）分别对齐，对得上的才是真的（认错的卡对不上几块）。
 // 对上了就把卡拉正再比对一次。返回新的比对结果，或者 null（都对不上）
 async function verifyByAlign(r, src, hints) {
@@ -2248,7 +2255,9 @@ async function verifyByAlign(r, src, hints) {
     } catch {}
   }
   if (!best || !best.a || best.n < Math.max(15, second * 1.2)) return null; // 认错的卡也会碰巧对上十来块
-  track.quad = best.a.quad.map(([x, y]) => [cx - side / 2 + (x * side) / 256, cy - side / 2 + (y * side) / 256]);
+  const vq = best.a.quad.map(([x, y]) => [cx - side / 2 + (x * side) / 256, cy - side / 2 + (y * side) / 256]);
+  if (!quadOk(vq, g, best.a)) return null;
+  track.quad = vq;
   track.id = best.p.id; track.miss = 0;
   const r2 = await visDecide(vis.quadCanvas(src, track.quad));
   r2.quad = track.quad;
@@ -2268,13 +2277,14 @@ function freezeFrame() {
   try {
     const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight;
     c.getContext("2d").drawImage(v, 0, 0);
+    frozenDims = { w: c.width, h: c.height };
     const img = $("preview"); img.src = c.toDataURL("image/jpeg", 0.85); img.classList.add("frozen"); img.hidden = false;
     return true;
   } catch { return false; }
 }
 function finishScan() {
   scanning = false; loopId++;
-  if (freezeFrame()) { showLockQuad(track.quad || guideQuad(lockInset), "hit"); beep(); try { navigator.vibrate && navigator.vibrate(40); } catch {} }
+  if (freezeFrame()) { showLockQuad(track.quad, track.quad ? "hit" : "off"); beep(); try { navigator.vibrate && navigator.vibrate(40); } catch {} }
   closeCam(); setScanUI("found");
   $("ocrPeek").hidden = true; $("visPeek").hidden = true;
 }
