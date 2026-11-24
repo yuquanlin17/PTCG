@@ -117,7 +117,8 @@ if (ds && ds.collections) {
     const si = out.sets.length;
     // 有 ★★ 的系列：★ = 精灵球、★★ = 大师球；只有 ★ 的（老系列）：★ = 镜面
     const balls = col.cards.some((k) => k.details && k.details.special_shiny_type === 2);
-    out.sets.push({ slug: "o" + col.id, code, name: String(col.name).trim(), rel: col.salesDate || "", lang: "zh-cn", kind: kindOf(col), src: "o", pcSlug: pcI != null ? sets[pcI].slug : "", count: col.cards.length });
+    out.sets.push({ slug: "o" + col.id, code, name: String(col.name).trim(), rel: col.salesDate || "", lang: "zh-cn", kind: kindOf(col), src: "o", pcSlug: pcI != null ? sets[pcI].slug : "", count: col.cards.length,
+      cover: String(col.image || "").replace(/^img\//, "").replace(/\.png$/, "") }); // 商品封面（补充包 / 礼盒的图）
     for (const k of col.cards) {
       const d = k.details || {}, t = d.special_shiny_type || 0, num = d.collectionNumber || "";
       const label = t === 1 ? (balls ? "精灵球" : "镜面") : t === 2 ? "大师球" : t >= 3 ? "特殊闪" + String(d.rarityText || "").replace(/^[^✦✧◇]*/, "") : "";

@@ -279,6 +279,9 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
 .sh-ver .im img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .sh-ver .im:has(img) span { visibility: hidden; }
 .sh-ver .t { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-ver .n { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.sh-ver .vt { font-size: 10.5px; font-weight: 700; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-ver .nm { font-weight: 700; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .sh-ver .p { font-family: var(--mono); font-weight: 700; }
 .lightbox { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.92); display: flex; align-items: center; justify-content: center; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
 .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 12px; }
@@ -588,7 +591,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "11.27b · 简中官图";
+const APP_VERSION = "11.28 · 系列图";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -1026,7 +1029,7 @@ function cardImgRaw(x) {
   if (!srcs.length) return ph();
   const img = document.createElement("img"); img.alt = ""; img.loading = "lazy";
   let i = 0;
-  img.onerror = () => { i++; if (i < srcs.length) img.src = srcs[i]; else img.replaceWith(ph()); };
+  img.onerror = () => { i++; if (i < srcs.length) img.src = srcs[i]; else { const p = ph(); if (img.id) p.id = img.id; img.replaceWith(p); } };
   img.src = srcs[0];
   return img;
 }
@@ -3401,7 +3404,8 @@ $("lightbox").onclick = () => { $("lightbox").hidden = true; $("lbImg").removeAt
 let verReq = 0;
 function openHistory(x) {
   shCard = x;
-  const im = cardImg(x); im.id = "shImg"; $("shImg").replaceWith(im);
+  // 卡图位置：按钮里的第一个元素（以前按 id 找，卡图载不下来换成占位时 id 丢了，之后所有卡都打不开）
+  const im = cardImg(x); im.id = "shImg"; $("shImgBtn").firstElementChild.replaceWith(im);
   // 没有卡图（占位）就不放大
   $("shImgBtn").onclick = () => { const cur = $("shImg"); if (!cur || cur.tagName !== "IMG") return; openLightbox(hiresOf(x), cur.src); };
   $("shName").innerHTML = `<span class="lang-pill" data-l="${x.lang}">${LANGS[x.lang]}</span> ${esc(x.name)}`;
@@ -3424,7 +3428,8 @@ function openHistory(x) {
   // 三个按钮：查看系列 / 其他版本 / 加入收藏
   const acts = $("shActs"); acts.innerHTML = ""; $("shVers").hidden = true; $("shVers").innerHTML = "";
   const btn = (html, fn) => { const b = document.createElement("button"); b.type = "button"; b.innerHTML = html; b.onclick = fn; acts.appendChild(b); return b; };
-  if (x.goSet) btn(`查看系列 ▸<small>${esc(x.setId || x.setName || "")}</small>`, () => { closeHistory(); x.goSet(); });
+  // 简中的系列代码（CSV8C、151C4…）不好认，显示系列名
+  if (x.goSet) btn(`查看系列 ▸<small>${esc(shortSet(x))}</small>`, () => { closeHistory(); x.goSet(); });
   if (x.versions) {
     const my = ++verReq;
     const vb = btn(`其他版本 ▸<small>查找中…</small>`, () => { const v = $("shVers"); v.hidden = !v.hidden; });
@@ -3448,6 +3453,11 @@ function openHistory(x) {
   $("sheetBg").hidden = false; document.body.style.overflow = "hidden";
   loadHistory();
 }
+// 系列简称：简中用系列名（去掉「补充包」这类前缀），其他用代码
+function shortSet(x) {
+  if (x.lang === "zh-cn" && x.setName) return String(x.setName).replace(/^(补充包|强化包|专题包|收集啦151)\s*/, (m, a) => (a === "收集啦151" ? "151 " : "")).trim() || x.setName;
+  return x.setId || x.setName || "";
+}
 // 版本：同一张卡图的日版 / 美版 / 球纹 / 复刻…，点一下切过去
 function renderVersions(cur, list) {
   const box = $("shVers"); box.innerHTML = ""; const tiles = [];
@@ -3455,8 +3465,9 @@ function renderVersions(cur, list) {
     const b = document.createElement("button"); b.type = "button"; b.className = "sh-ver";
     if (v.id === cur.id) b.setAttribute("aria-current", "true");
     const usd = v.price && v.price.usd;
-    b.innerHTML = `<div class="im"><span>暂无图片</span></div><div><span class="lang-pill" data-l="${v.lang}">${LANGS[v.lang]}</span></div>
-      <div class="t">${esc(v.setId || "")} ${esc(v.localId || "")}${v.var ? " " + esc(v.var) : ""}</div><div class="p"${usd != null ? ` data-usd="${usd}"` : ""}>${usd != null ? fmt(usd) : v.price === undefined ? "…" : "—"}</div>`;
+    b.innerHTML = `<div class="im"><span>暂无图片</span></div><div class="n"><span class="lang-pill" data-l="${v.lang}">${LANGS[v.lang]}</span>${v.var ? `<b class="vt">${esc(String(v.var).replace(/闪$/, ""))}</b>` : ""}</div>
+      <div class="nm">${esc(String(v.name || "").replace(/（[^）]*）$/, ""))}</div>
+      <div class="t">${esc(shortSet(v))} ${esc(v.localId || "")}</div><div class="p"${usd != null ? ` data-usd="${usd}"` : ""}>${usd != null ? fmt(usd) : v.price === undefined ? "…" : "—"}</div>`;
     const src = v.img || imgSources(v)[0];
     if (src) { const im = document.createElement("img"); im.alt = ""; im.loading = "lazy"; im.onerror = () => { if (v.img2 && im.src !== v.img2) im.src = v.img2; else im.remove(); }; im.src = src; b.querySelector(".im").appendChild(im); }
     b.onclick = () => { if (v.id !== cur.id) openHistory(v); };
