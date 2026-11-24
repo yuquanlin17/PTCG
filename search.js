@@ -81,7 +81,10 @@ export function makeDict(json, aliases = {}) {
   const entries = json.n.map(([en, ja, hant, hans, kind]) => {
     const forms = [...new Set([en, ja, hant, hans].filter(Boolean).map(norm))];
     const py = [...new Set([hant, hans].filter(Boolean).map((s) => pyOf(norm(s))))];
-    return { en, ja, hant, hans, kind, forms, py };
+    // 拼音全拼（pikaqiu）和首字母（pkq），只算汉字部分
+    const pyl = py.map((p) => p.split(" ").filter((x) => /^[a-zü]+$/.test(x)));
+    const pyFull = [...new Set(pyl.map((a) => a.join("")))].filter((x) => x.length >= 2), pyIni = [...new Set(pyl.map((a) => a.map((x) => x[0]).join("")))].filter((x) => x.length >= 2);
+    return { en, ja, hant, hans, kind, forms, py, pyFull, pyIni };
   });
   const byEn = new Map(entries.map((e) => [e.en.toLowerCase(), e]));
   // 值以「=」开头的是「换成这句话再查」（指向某一张卡：「黄昏莉莉艾」→「=397/SM-P」），其他是英文卡名
@@ -135,6 +138,11 @@ export function matchNames(dict, name, depth = 0) {
       if (f.length >= 2 && q.includes(f)) s = Math.max(s, 70 + Math.min(20, f.length * 3)); // 句子里有这个名字（黄昏莉莉艾 → 莉莉艾）
       else if (q.length >= (cjk ? 2 : 3) && f.includes(q)) s = Math.max(s, 60 + 25 * (q.length / f.length)); // 名字的一部分（rayqu → Rayquaza）
       else if (!cjk && q.length >= 4 && !isCJK(f)) { const d = lev(q, f); if (d <= Math.max(1, Math.floor(q.length / 4))) s = Math.max(s, 75 - d * 8); } // 拼错
+    }
+    // 打拼音：全拼（pikaqiu / liekongzuo）或首字母（pkq / lkz）
+    if (!cjk && /^[a-z]+$/.test(q) && q.length >= 2) {
+      for (const p of e.pyFull) { if (p === q) s = Math.max(s, 95); else if (q.length >= 4 && p.startsWith(q)) s = Math.max(s, 72 + 20 * (q.length / p.length)); }
+      for (const p of e.pyIni) { if (p === q) s = Math.max(s, q.length >= 3 ? 88 : 70); else if (q.length >= 3 && p.startsWith(q)) s = Math.max(s, 66); }
     }
     if (cjk && s < 90) for (const p of e.py) {
       if (p === qpy) s = Math.max(s, 92); // 同音字（裂空座 = 烈空坐）

@@ -63,7 +63,7 @@ async function detail(id) {
   const mark = (h.match(/class="img-regulation"[^>]*alt="([^"]*)"/) || [])[1] || "";
   const d = m ? { n: parseInt(m[1], 10), total: m[2], mark } : null;
   detailCache.set(id, d);
-  await sleep(250);
+  await sleep(120);
   return d;
 }
 const codeOf = (set) => (set.includes(":") ? set.split(":")[0].trim() : { "World Champions Pack": "WCP" }[set] || "");
@@ -109,6 +109,14 @@ for (const [key, list] of bySet) {
   let folder = null, cards = [];
   for (const g of [...new Set([code, code.toUpperCase()].filter(Boolean))]) { cards = await product(g); if (cards.length) { folder = g; break; } }
   if (!folder) for (const [, v] of list.slice(0, 4)) { const c = await findByName(v); if (c) { folder = c.folder; cards = await product(folder); break; } }
+  // 只缺一两张：先按卡名找（比扫整套快）
+  if (list.length <= 3) {
+    const rest = [];
+    for (const [pid, v] of list) { const c = await findByName(v); if (c) add1(pid, v, c.img); else rest.push([pid, v]); }
+    console.log(`  ${key}：按卡名找到 ${list.length - rest.length}/${list.length}`);
+    if (!rest.length) continue;
+    list.splice(0, list.length, ...rest);
+  }
   if (!folder || !cards.length) {
     // 不知道是哪套：一张一张按卡名找
     let k = 0;
@@ -116,9 +124,13 @@ for (const [key, list] of bySet) {
     console.log(`  ${key}：没找到对应的商品，按卡名找到 ${k}/${list.length}`);
     continue;
   }
-  // 整套卡的编号（详细页上的「编号 / 总数」）
+  // 整套卡的编号（详细页上的「编号 / 总数」）：4 张一起查，要的编号都找到了就停
+  const need = new Set(list.map(([, v]) => parseInt(String(v[2]).split("/")[0], 10)).filter(Boolean));
   const byNum = new Map();
-  for (const c of cards) { const d = await detail(c.id); if (d && !byNum.has(d.n)) byNum.set(d.n, c); }
+  for (let i = 0; i < cards.length && [...need].some((n) => !byNum.has(n)); i += 4) {
+    const ds = await Promise.all(cards.slice(i, i + 4).map((c) => detail(c.id)));
+    ds.forEach((d, j) => { if (d && !byNum.has(d.n)) byNum.set(d.n, cards[i + j]); });
+  }
   let k = 0;
   for (const [pid, v] of list) {
     const N = parseInt(String(v[2]).split("/")[0], 10), c = N && byNum.get(N);

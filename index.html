@@ -243,7 +243,7 @@ nav.bottom { position: fixed; left: 0; right: 0; bottom: 0; background: var(--su
 .site-foot #footLine { font-weight: 600; }
 .site-foot small { display: block; font-size: 11px; opacity: .8; margin-top: 2px; }
 
-nav.bottom { grid-template-columns: 1fr 1fr 1fr; }
+nav.bottom { grid-template-columns: repeat(4, 1fr); }
 nav.bottom { backdrop-filter: saturate(1.6) blur(12px); -webkit-backdrop-filter: saturate(1.6) blur(12px); background: color-mix(in srgb, var(--surface) 88%, transparent); }
 nav.bottom button { border: 0; background: transparent; padding: 8px 0 10px; font-size: 12px; color: var(--muted); font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 nav.bottom button svg { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -330,6 +330,9 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
   </section>
 
   <!-- 发售日历：美版 / 日版 / 简中即将发售的商品 -->
+  <!-- 图鉴：dex.js，第一次打开时才载入 -->
+  <section id="pageDex" hidden></section>
+
   <section id="pageCal" hidden>
     <div class="cal-head"><h2>发售日历</h2><small id="calUpdated"></small></div>
     <div class="filters" role="tablist" aria-label="按版本筛选" id="calFilters"></div>
@@ -389,6 +392,7 @@ nav.bottom button[aria-current="page"] { color: var(--accent); }
 
 <nav class="bottom">
   <button id="navScan" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><rect x="8.5" y="7" width="7" height="10" rx="1.2"/></svg>扫描</button>
+  <button id="navDex"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="7" height="9.5" rx="1.2"/><rect x="13.5" y="4" width="7" height="9.5" rx="1.2"/><path d="M3.5 17.5h17M3.5 20.5h11"/></svg>图鉴</button>
   <button id="navCal"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14h2M14 14h2M8 17h2"/></svg>日历</button>
   <button id="navLib"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="11" height="15" rx="1.5"/><path d="M17.5 7.5l2.2.6a1.2 1.2 0 0 1 .85 1.47l-2.9 10.6"/></svg>收藏</button>
 </nav>
@@ -555,7 +559,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "11.24b · 扫描提速";
+const APP_VERSION = "11.25 · 图鉴";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -3431,7 +3435,7 @@ function makeClickable(el, x) {
 
 // ---------- 导航 ----------
 function go(page) {
-  const pages = { scan: ["pageScan", "navScan"], cal: ["pageCal", "navCal"], lib: ["pageLib", "navLib"] };
+  const pages = { scan: ["pageScan", "navScan"], dex: ["pageDex", "navDex"], cal: ["pageCal", "navCal"], lib: ["pageLib", "navLib"] };
   for (const [k, [sec, nav]] of Object.entries(pages)) {
     $(sec).hidden = k !== page;
     if (k === page) $(nav).setAttribute("aria-current", "page"); else $(nav).removeAttribute("aria-current");
@@ -3439,9 +3443,12 @@ function go(page) {
   if (page !== "scan") stopScan();
   if (page === "lib") { renderLib(); refreshAll(false); }
   if (page === "cal") openCalendar();
+  if (page === "dex") import("./dex.js").then((m) => m.initDex({ $, esc, fmt, getJSON, proxyUrl, openHistory, addToLib, toast, store, searchLib }))
+    .catch((e) => { $("pageDex").innerHTML = `<div class="empty">图鉴载入失败：${esc(e.message)}</div>`; });
 }
 $("navScan").onclick = () => go("scan");
 $("navCal").onclick = () => go("cal");
+$("navDex").onclick = () => go("dex");
 $("navLib").onclick = () => go("lib");
 
 // ---------- 发售日历 ----------

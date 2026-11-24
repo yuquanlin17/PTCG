@@ -23,6 +23,9 @@ jobs:
       - name: 翻译（简中 / 日文 / 英文互译，提前做好）
         continue-on-error: true   # 翻译出问题不影响日历本身
         run: node tools/translate-cal.mjs
+      - name: 图鉴简中卡表和价格（PriceCharting）
+        continue-on-error: true
+        run: node tools/build-cn.mjs
       - name: 识别模型
         run: |
           f=models/Xenova/dinov2-small/onnx/model_fp16.onnx
@@ -31,5 +34,5 @@ jobs:
         run: |
           git config user.name "calendar-bot"
           git config user.email "calendar-bot@users.noreply.github.com"
-          git add -A cal-cn.json cal-msrp.json cal-img models && { [ ! -f cal-tr.json ] || git add cal-tr.json; }
+          git add -A cal-cn.json cal-msrp.json cal-img models && { [ ! -f cal-tr.json ] || git add cal-tr.json; } && { [ ! -f cn-dex.json ] || git add cn-dex.json; }
           git diff --cached --quiet || (git commit -m "更新发售日历" && git pull --rebase -X theirs && git push)
