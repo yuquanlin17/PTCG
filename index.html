@@ -2344,8 +2344,12 @@ async function visDecide(canvas) {
 }
 // 在同一张卡图的几个版本里，用读到的卡底文字挑：编号、总数、EN、日版系列代码
 // 挑得出来返回 [那一张]；挑不出来，最像的又领先不多，就按相似度全列出来
+// 球纹 / 镜面等版本没有自己的卡图，借用普通版的特征（vis/meta 里两张卡特征一模一样）：
+// 比对分不出来，默认普通版，其他版本放在「其他版本」按钮里
+const isVariant = (p) => /\((?:[^)]*\b(?:Pattern|Mirror|Reverse|Ball|Holo(?:foil)?)\b)[^)]*\)/i.test(p.name);
 function visPick(r, hints = []) {
-  const fam = r.family;
+  const all = r.family;
+  const fam = all.filter((t) => !isVariant(t.p) || !all.some((u) => u !== t && !isVariant(u.p) && Math.abs(u.sim - t.sim) < 1e-4));
   if (fam.length === 1) return { list: fam, sure: true };
   const nums = hints.flatMap((p) => p.nums || []), en = hints.some((p) => p.en && p.nums.length);
   const tokens = new Set(hints.flatMap((p) => p.tokens || []));
@@ -2392,7 +2396,12 @@ async function visAgrees(c, canvas) {
 const verLabel = (p) => {
   const [code, rest] = String(p.set).split(/:\s*/);
   const set = p.line === "pokemon-japan" ? code : (rest || code).replace(/^Scarlet & Violet\s*/i, "").slice(0, 26);
-  return `${p.line === "pokemon" ? "美版" : "日版"} ${set} ${p.number}`;
+  // 版本说明（大师球 / 精灵球 / 镜面…）写上，几个按钮才分得清
+  const VAR = { "master ball pattern": "大师球", "poke ball pattern": "精灵球", "poke ball": "精灵球", "love ball": "甜蜜球", "friend ball": "友友球",
+    "energy symbol pattern": "能量标志", "mirror holofoil": "镜面", "mirror holo": "镜面", "reverse holofoil": "反闪", "cosmos holo": "宇宙闪" };
+  const v = (String(p.name).match(/\(([^)]+)\)/) || [])[1] || "";
+  const tag = v ? VAR[v.toLowerCase()] || v : "";
+  return `${p.line === "pokemon" ? "美版" : "日版"} ${set} ${p.number}${tag ? " " + tag : ""}`;
 };
 function versionRow(el, c, curId, all) {
   const meta = el.querySelector(".meta");
@@ -2601,7 +2610,7 @@ async function visShow(r, auto, hints = [], pick = visPick(r, hints), retry = nu
   // 只显示了一张：同一张卡图的其他版本（原版 / 复刻 / 日版 / 美版）放一排按钮，认错版本时点一下就换
   if (list.length === 1 && !pick.guess) {
     const cur = pick.list[0], seen = new Set();
-    const all = r.top.filter((t) => baseName(t.p.name) === baseName(cur.p.name) && r.best.sim - t.sim < 0.15 && !seen.has(t.p.id) && seen.add(t.p.id)).slice(0, 6);
+    const all = r.top.filter((t) => baseName(t.p.name) === baseName(cur.p.name) && r.best.sim - t.sim < 0.15 && !seen.has(t.p.id) && seen.add(t.p.id)).slice(0, 8);
     const el = $("results").querySelector(":scope > .card");
     if (el && all.length > 1) versionRow(el, c, cur.p.id, all);
   }

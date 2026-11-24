@@ -55,6 +55,14 @@ const perSet = new Map(); // "l|set" → 卡图库里有几张（加上没有卡
 const bump = (k) => perSet.set(k, (perSet.get(k) || 0) + 1);
 for (const it of meta.items) { const s = meta.sets[it[1]]; bump(s[1] + "|" + s[0]); }
 for (const [, [k, d]] of Object.entries(noimg)) if (!stale(d)) bump(k);
+// ---------- 没有卡图的版本用同一张卡的卡图代替 ----------
+// 球纹 / 镜面 / 反闪等版本（TCGplayer 常常没放卡图）和普通版卡图几乎一样；世界赛卡组等复刻和原版同名同编号。
+// 找到「同语言 + 同系列 + 同编号 + 同名」的卡（找不到再放宽到其他系列、但编号要带总数），用它的特征，扫描时会作为同一张卡的一个版本列出来
+const baseNm = (s) => String(s || "").replace(/\s*\(.*?\)|\s*\[.*?\]/g, "").replace(/\s*-\s*[\w/-]*\d[\w/-]*\s*$/, "").replace(/\s+/g, " ").trim().toLowerCase();
+const sib = new Map();
+const sibKeys = (l, set, n, name) => [`${l}|${set}|${n}|${baseNm(name)}`].concat(/\d\/\d/.test(n) ? [`${l}||${n}|${baseNm(name)}`] : []);
+meta.items.forEach((it, i) => { const st = meta.sets[it[1]]; for (const k of sibKeys(st[1], st[0], it[2], it[3])) if (!sib.has(k)) sib.set(k, i); });
+const findSib = (c) => { for (const k of sibKeys(c.l, c.set, c.n, c.name)) if (sib.has(k)) return sib.get(k); return -1; };
 const fresh = [];
 const RANGE = SINCE > "1996" ? { releaseDate: { gte: SINCE } } : {};
 for (const [line, l] of [["pokemon-japan", "ja"], ["pokemon", "en"]]) {
@@ -98,6 +106,26 @@ fresh.sort((a, b) => (b.rel || "").localeCompare(a.rel || ""));
 const todo = LIMIT ? fresh.slice(0, LIMIT) : fresh;
 console.log(`新卡 ${fresh.length} 张${LIMIT ? `（这次只算 ${todo.length} 张）` : ""}`);
 if (process.env.DRY) { fs.writeFileSync(process.env.DRY, JSON.stringify(fresh, null, 1)); process.exit(0); } // 只看清单不算
+// 以前记下的「没有卡图」的：先试试能不能用同一张卡的卡图代替（不用浏览器）
+{
+  const setIdx0 = new Map(meta.sets.map((st, i) => [st[1] + "|" + st[0], i]));
+  const add = [];
+  for (const [id, v] of Object.entries(noimg)) {
+    if (v.length < 6) continue; // 旧格式没记卡名编号
+    const [key, , n, name, r, rel] = v, [l, ...rest] = key.split("|"), c = { l, set: rest.join("|"), n, name };
+    const i = findSib(c);
+    if (i < 0) continue;
+    if (!setIdx0.has(key)) { setIdx0.set(key, meta.sets.length); meta.sets.push([c.set, l]); }
+    meta.items.push([+id, setIdx0.get(key), n, stripNo(name), r, rel || ""]);
+    add.push(vecAll.subarray(i * meta.D, (i + 1) * meta.D));
+    delete noimg[id];
+  }
+  if (add.length) {
+    vecAll = Buffer.concat([vecAll, ...add.map((v) => Buffer.from(v))]);
+    fs.writeFileSync(F("vis/vec.bin"), vecAll); fs.writeFileSync(F("vis/meta.json"), JSON.stringify(meta)); fs.writeFileSync(F("vis/noimg.json"), JSON.stringify(noimg));
+    console.log(`没有卡图的：${add.length} 张用同一张卡的卡图代替（球纹 / 镜面等版本、复刻）`);
+  }
+}
 if (!todo.length) process.exit(0);
 
 // ---------- 3. 算特征（无界面 Chrome，网页同一份 vis.js） ----------
@@ -140,7 +168,7 @@ for (let i = 0; i < PAGES; i++) pages.push(await openPage());
 console.log(`模型：${pages[0].device} × ${pages.length}`);
 
 const setIdx = new Map(meta.sets.map((s, i) => [s[1] + "|" + s[0], i]));
-let fresh8 = [], ok = 0, fail = 0, sinceSave = 0, next = 0, stop = false;
+let fresh8 = [], ok = 0, fail = 0, proxied = 0, sinceSave = 0, next = 0, stop = false;
 function save() {
   if (fresh8.length) {
     const add = new Int8Array(fresh8.length * meta.D);
@@ -162,12 +190,20 @@ async function worker({ page }) {
     try { out = await page.evaluate((ids) => embedIds(ids), batch.map((c) => c.id)); } catch (e) { console.log("  这批出错，下次再算：", String(e).slice(0, 120)); continue; }
     batch.forEach((c, j) => {
       const key = c.l + "|" + c.set;
-      if (!out[j]) { fail++; noimg[c.id] = [key, today]; return; }
+      if (!out[j]) {
+        // 没有卡图：同一张卡（普通版 / 原版）在库里就借用它的特征；不在就记下来（连卡名编号一起，下次还能再借）
+        const si = findSib(c);
+        if (si < 0) { fail++; noimg[c.id] = [key, today, c.n, c.name, c.r, c.rel || ""]; return; }
+        const base = vecAll.length / meta.D;
+        out[j] = Array.from(si < base ? vecAll.subarray(si * meta.D, (si + 1) * meta.D) : fresh8[si - base]);
+        proxied++;
+      }
       delete noimg[c.id];
       if (!setIdx.has(key)) { setIdx.set(key, meta.sets.length); meta.sets.push([c.set, c.l]); }
       // meta 和向量要一一对应：两边同时加
       meta.items.push([c.id, setIdx.get(key), c.n, stripNo(c.name), c.r, c.rel || ""]);
       fresh8.push(Int8Array.from(out[j]));
+      for (const k of sibKeys(c.l, c.set, c.n, c.name)) if (!sib.has(k)) sib.set(k, meta.items.length - 1);
       ok++; sinceSave++;
     });
     if (sinceSave >= 1000) { save(); console.log(`  已算 ${ok + fail}/${todo.length}（${((Date.now() - T0) / 60e3).toFixed(0)} 分钟），已保存`); }
@@ -176,4 +212,4 @@ async function worker({ page }) {
 await Promise.all(pages.map(worker));
 await browser.close();
 save();
-console.log(`卡图库：加了 ${ok} 张（没有卡图 ${fail} 张），共 ${meta.items.length} 张${stop ? `；时间到了，还剩 ${todo.length - next} 张下次接着算` : ""}`);
+console.log(`卡图库：加了 ${ok} 张（其中 ${proxied} 张借用同一张卡的卡图），没有卡图 ${fail} 张，共 ${meta.items.length} 张${stop ? `；时间到了，还剩 ${todo.length - next} 张下次接着算` : ""}`);
