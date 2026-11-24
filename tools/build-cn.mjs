@@ -1,5 +1,10 @@
-// 图鉴的简中卡表 cn-dex.json：简中没有公开的卡牌数据库（官方卡表只在微信小程序里），用 PriceCharting 的简中系列（卡名、编号、卡图、裸卡价，美元）。
-// 系列中文名和发售日用 TCGdex 的简中系列表。每天跟着发售日历一起更新（价格每天变）；本地：node tools/build-cn.mjs
+// 图鉴的简中卡表 cn-dex.json，两个来源：
+// 1. 卡表和官图：PTCG-CHS-Datasets（github.com/duanxr/PTCG-CHS-Datasets，社区整理的官方小程序卡表：官方卡名、编号、稀有度、精灵球 / 大师球等版本、官方卡图）。
+//    卡图不复制，网页直接链到该仓库（jsDelivr），按数据集的说明只做非商业用途。
+// 2. 价格：PriceCharting 的简中系列（裸卡价、Grade 9、PSA 10，美元），按「系列代码 + 编号 + 版本」对到官方卡上；
+//    官方卡表里没有的系列（PriceCharting 独有的）照旧用 PriceCharting 的卡名和照片。
+// 官方卡一行：[官方 id, 系列, 编号, 卡名, 版本, 卡图, 裸卡价, Grade 9, PSA 10, 稀有度, PriceCharting 卡名 [版本], PriceCharting 编号, PriceCharting 商品号]
+// 每天跟着发售日历一起更新（价格每天变）；本地：node tools/build-cn.mjs（调试：CN_PC=旧的 PriceCharting 卡表 node tools/build-cn.mjs --reuse，不重新抓 PriceCharting）
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +21,16 @@ async function get(url, json) {
 }
 const slugOf = (consoleName) => String(consoleName).toLowerCase().replace(/\./g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
+const REUSE = process.argv.includes("--reuse");
+let sets = [], cards = [];
+if (REUSE) {
+  // 用以前只有 PriceCharting 的 cn-dex.json（CN_PC=文件路径）
+  const old = JSON.parse(fs.readFileSync(process.env.CN_PC || path.join(ROOT, "cn-dex.json"), "utf8"));
+  const keep = new Map();
+  old.sets.forEach((s, i) => { if (s.src !== "o") { keep.set(i, sets.length); sets.push(s); } });
+  for (const c of old.cards) if (keep.has(c[1])) cards.push([c[0], keep.get(c[1]), ...c.slice(2, 9)]);
+} else await scrapePC();
+async function scrapePC() {
 // ---------- 有哪些简中系列 ----------
 const slugs = new Set();
 const cat = (await get(`${PC}/category/pokemon-cards`)) || "";
@@ -48,7 +63,6 @@ async function setInfo(slug) {
 }
 
 // ---------- 每个系列的卡 ----------
-const sets = [], cards = [];
 for (const slug of [...slugs].sort()) {
   const info = await setInfo(slug);
   const si = sets.length;
@@ -78,5 +92,63 @@ for (const slug of [...slugs].sort()) {
   await sleep(500);
 }
 sets.forEach((s) => (s.rel = s.rel || ""));
-fs.writeFileSync(path.join(ROOT, "cn-dex.json"), JSON.stringify({ at: Date.now(), src: "PriceCharting", sets, cards }));
-console.log(`简中卡表：${sets.length} 个系列，${cards.length} 张`);
+}
+console.log(`PriceCharting：${sets.length} 个系列，${cards.length} 张`);
+
+// ---------- 官方卡表（PTCG-CHS-Datasets） ----------
+const DS = "duanxr/PTCG-CHS-Datasets";
+const head = await get(`https://api.github.com/repos/${DS}/commits/main`, true);
+const rev = (head && head.sha) || "main";
+const ds = (await get(`https://raw.githubusercontent.com/${DS}/${rev}/ptcg_chs_infos.json`, true)) || (await get(`https://cdn.jsdelivr.net/gh/${DS}@${rev}/ptcg_chs_infos.json`, true));
+const out = { at: Date.now(), src: "PTCG-CHS-Datasets + PriceCharting", img: `https://cdn.jsdelivr.net/gh/${DS}@${rev.slice(0, 12)}/img/`, sets: [], cards: [] };
+const numOf = (s) => { const m = String(s || "").match(/\d+/); return m ? +m[0] : null; };
+const PB = /^(poke ?ball|reverse( holo)?)$/i, MB = /^(m(a|s)?s?ter ?ball|masterball|msater ball)$/i;
+if (ds && ds.collections) {
+  // PriceCharting 的卡按「系列代码 | 编号」分组（151 的旅 / 望 / 惊 / 聚四个盒子都对到 PriceCharting 的 151C）
+  const pcBy = new Map(), pcSet = new Map();
+  sets.forEach((s, i) => { if (s.lang === "zh-cn") pcSet.set(s.code.toUpperCase(), i); });
+  for (const c of cards) { const k = c[1] + "|" + numOf(c[2]); if (!pcBy.has(k)) pcBy.set(k, []); pcBy.get(k).push(c); }
+  const used = new Set();
+  const kindOf = (col) => col.goodsType === "1" ? "pack" : col.goodsType === "2" ? "deck" : /PROMO|MISSION|-P-|ML\d|GIFT|EVENT/i.test(col.commodityCode) ? "promo" : "deck";
+  let matched = 0, total = 0;
+  for (const col of ds.collections) {
+    const code = String(col.commodityCode).trim();
+    const pcI = pcSet.get(code.toUpperCase()) ?? (/^151C\d$/i.test(code) ? pcSet.get("151C") : undefined);
+    const si = out.sets.length;
+    // 有 ★★ 的系列：★ = 精灵球、★★ = 大师球；只有 ★ 的（老系列）：★ = 镜面
+    const balls = col.cards.some((k) => k.details && k.details.special_shiny_type === 2);
+    out.sets.push({ slug: "o" + col.id, code, name: String(col.name).trim(), rel: col.salesDate || "", lang: "zh-cn", kind: kindOf(col), src: "o", pcSlug: pcI != null ? sets[pcI].slug : "", count: col.cards.length });
+    for (const k of col.cards) {
+      const d = k.details || {}, t = d.special_shiny_type || 0, num = d.collectionNumber || "";
+      const label = t === 1 ? (balls ? "精灵球" : "镜面") : t === 2 ? "大师球" : t >= 3 ? "特殊闪" + String(d.rarityText || "").replace(/^[^✦✧◇]*/, "") : "";
+      // 稀有度：字母（C / U / R / SAR…，去掉版本记号 ★）；宝石包只有记号（● ◆ ★ ★★ ★★★）就保留记号
+      const rt = String(d.rarityText || "").replace(/无标记/g, "").trim(), rar = /^[A-Z]/.test(rt) ? rt.replace(/[^A-Z]/g, "") : t ? "" : rt;
+      let pc = null;
+      if (pcI != null) {
+        // 宝石包编号：官方「01 07/09」（第 1 组第 7 张）= PriceCharting「107」
+        const g = String(num).match(/^(\d+)\s+(\d+)\/\d+$/), key = g ? +g[1] * 100 + +g[2] : numOf(num);
+        const list = (pcBy.get(pcI + "|" + key) || []).filter((c) => !used.has(c));
+        const ex = /ex$/i.test(k.name || ""), pref = (a) => a.sort((x, y) => (/ex$/i.test(y[3]) === ex) - (/ex$/i.test(x[3]) === ex));
+        if (t === 0) { const plain = pref(list.filter((c) => !c[4] || /^holo$/i.test(c[4]))); pc = plain[0] || (list.length === 1 && !PB.test(list[0][4]) && !MB.test(list[0][4]) ? list[0] : null); }
+        else pc = t === 1 ? list.find((c) => PB.test(c[4])) : t === 2 ? list.find((c) => MB.test(c[4])) : null;
+        if (pc && !/^151C\d$/i.test(code)) used.add(pc);
+      }
+      total++; if (pc) matched++;
+      const img = String(k.image || "").replace(/^img\//, "").replace(/\.png$/, "");
+      out.cards.push([k.id, si, num, k.name || d.cardName || "", label, img, pc ? pc[6] : null, pc ? pc[7] : null, pc ? pc[8] : null, rar, pc ? `${pc[3]}${pc[4] ? ` [${pc[4]}]` : ""}` : "", pc ? pc[2] : "", pc ? pc[0] : 0]);
+    }
+  }
+  console.log(`官方卡表：${ds.collections.length} 个商品，${total} 张；对上 PriceCharting 价格 ${matched} 张`);
+  // PriceCharting 独有的简中系列（官方卡表里没有的）和繁中系列照旧
+  const offSet = new Set(ds.collections.map((c) => String(c.commodityCode).trim().toUpperCase()));
+  sets.forEach((s, i) => {
+    if (s.lang === "zh-cn" && (offSet.has(s.code.toUpperCase()) || (s.code === "151C" && offSet.has("151C1")))) return;
+    const si = out.sets.length; out.sets.push({ ...s, src: "pc" });
+    for (const c of cards) if (c[1] === i) out.cards.push([c[0], si, ...c.slice(2, 9)]);
+  });
+} else {
+  console.log("官方卡表下载失败，只用 PriceCharting");
+  out.sets = sets.map((s) => ({ ...s, src: "pc" })); out.cards = cards;
+}
+fs.writeFileSync(path.join(ROOT, "cn-dex.json"), JSON.stringify(out));
+console.log(`简中卡表：${out.sets.length} 个系列，${out.cards.length} 张`);

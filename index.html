@@ -588,7 +588,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "11.26 · 卡片详情";
+const APP_VERSION = "11.27 · 简中官图";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -926,7 +926,7 @@ function pcLookup(q, n) {
 async function priceFor(x) {
   if (x.lang === "zh-cn") {
     if (!x.pcq) return null;
-    try { const j = await pcLookup(x.pcq, parseInt(x.localId, 10)); if (j && j.price != null) return { usd: j.price, src: "PriceCharting", detail: "裸卡价 · 简中" }; } catch {}
+    try { const j = await pcLookup(x.pcq, parseInt(x.pcNum || x.localId, 10)); if (j && j.price != null) return { usd: j.price, src: "PriceCharting", detail: "裸卡价 · 简中" }; } catch {}
     return null;
   }
   try {
@@ -952,6 +952,8 @@ async function priceFor(x) {
 const LIMITLESS = "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com";
 function imgSources(x) {
   const out = [];
+  const off = x.lang === "zh-cn" && !String(x.pcImg || "").includes("PTCG-CHS") ? cnOfficialImg(cnRow(x)) : "";
+  if (off) out.push(off);
   if (x.pcImg) out.push(x.pcImg);
   if (x.tpId && !x.noImg) out.push(`https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_200w.jpg`);
   if (x.image) out.push(x.image + "/low.webp");
@@ -968,7 +970,53 @@ function imgSources(x) {
   }
   return out;
 }
+// 简中官方卡表（cn-dex.json：官方卡名、官图，价格对到 PriceCharting）：扫描 / 收藏里的简中卡用它换成官图
+let cnDexP = null, cnIdx = null;
+const cnCode = (s) => String(s || "").toUpperCase().replace(/\./g, "");
+function loadCnDex() {
+  if (!cnDexP) cnDexP = fetch("cn-dex.json").then((r) => r.json()).then((j) => {
+    const byNum = new Map(), byPc = new Map();
+    j.cards.forEach((c) => {
+      const s = j.sets[c[1]]; if (s.src !== "o") return;
+      const n = /^\d+\s/.test(c[2]) ? null : parseInt(c[2], 10);
+      if (n != null) { const k = cnCode(s.code) + "|" + n; if (!byNum.has(k)) byNum.set(k, []); byNum.get(k).push(c); }
+      if (c[12]) byPc.set(String(c[12]), c);
+    });
+    // 151 的四个盒子（旅 / 望 / 惊 / 聚）和活动包同一套编号：代码 151C 也能找到
+    for (const [k, v] of [...byNum]) { const m = k.match(/^151C\d\|(\d+)$/); if (m && !byNum.has("151C|" + m[1])) byNum.set("151C|" + m[1], v); }
+    cnIdx = { j, byNum, byPc };
+    return cnIdx;
+  }).catch((e) => { cnDexP = null; throw e; });
+  return cnDexP;
+}
+function cnRow(x) {
+  if (!cnIdx || x.lang !== "zh-cn") return null;
+  const pc = String(x.id || "").match(/^pc(\d+)$/);
+  if (pc && cnIdx.byPc.has(pc[1])) return cnIdx.byPc.get(pc[1]);
+  const list = cnIdx.byNum.get(cnCode(x.setRef || x.setId) + "|" + parseInt(x.localId, 10));
+  return list ? list.find((c) => !c[4]) || list[0] : null;
+}
+const cnOfficialImg = (c) => (c && c[5] ? cnIdx.j.img + c[5] + ".png" : "");
+// 官方卡一行 → 卡片对象（和图鉴里的一样）
+function cnCardOf(c) {
+  const s = cnIdx.j.sets[c[1]], std = /^\d+\/\S+$/.test(c[2]);
+  const o = { lang: "zh-cn", id: "cn" + c[0], name: c[3] + (c[4] ? `（${c[4]}）` : ""), setName: s.name, setId: s.code, localId: std ? c[2].split("/")[0] : c[2], tpNum: c[2],
+    official: std ? parseInt(c[2].split("/")[1], 10) || null : null, pcImg: cnOfficialImg(c), image: "", rar: c[9] || "", var: c[4] || "",
+    pcq: c[10] && s.pcSlug ? `${s.pcSlug.replace(/-/g, " ")} ${c[10]} #${c[11]}` : null, pcNum: c[11] || null, rel: s.rel || null,
+    price: c[6] != null ? { usd: c[6], src: "PriceCharting" } : null, graded: c[7] || c[8] ? { g9: c[7], psa10: c[8] } : null };
+  o.versions = async () => cnIdx.j.cards.filter((y) => y[1] === c[1] && parseInt(y[2], 10) === parseInt(c[2], 10)).map((y) => (y === c ? o : cnCardOf(y)));
+  return o;
+}
 function cardImg(x) {
+  if (x.lang === "zh-cn" && !cnIdx) {
+    // 官方卡表还没载入：先显示原来的图，载入后换成官图
+    const el = cardImgRaw(x);
+    loadCnDex().then(() => { const u = cnOfficialImg(cnRow(x)); if (u && el.isConnected) { const n = cardImgRaw(x); el.replaceWith(n); if (el.id) n.id = el.id; } }).catch(() => {});
+    return el;
+  }
+  return cardImgRaw(x);
+}
+function cardImgRaw(x) {
   const srcs = imgSources(x);
   const ph = () => {
     const d = document.createElement("div"); d.className = "ph";
@@ -1539,6 +1587,9 @@ async function tcgNumberCandidates(parsed) {
 // 在某个系列里找第 n 张卡
 async function candidate(lang, set, num) {
   const n = num.n;
+  if (lang === "zh-cn") {
+    try { await loadCnDex(); const c = cnRow({ lang, setId: set.id, localId: n }); if (c) return cnCardOf(c); } catch {}
+  }
   if (lang === "zh-cn" && set.pc) {
     const q = `${set.pc} #${n}`;
     let j = null;
@@ -1754,7 +1805,7 @@ function autoSave(c, el) {
 
 function addToLib(c, qty) {
   lib.push({ key: keyOf(c.lang, c.id), lang: c.lang, id: c.id, name: c.name, setName: c.setName, setId: c.abbr || c.setId, setRef: c.setId,
-    localId: c.localId, official: c.official, image: c.image, tpId: c.tpId || null, tpOnly: !!c.tpOnly, abbr: c.abbr || null, rel: c.rel || null, pcq: c.pcq || null, pcImg: c.pcImg || "", tpNum: c.tpNum || null, qty,
+    localId: c.localId, official: c.official, image: c.image, tpId: c.tpId || null, tpOnly: !!c.tpOnly, abbr: c.abbr || null, rel: c.rel || null, pcq: c.pcq || null, pcNum: c.pcNum || null, pcImg: c.pcImg || "", tpNum: c.tpNum || null, qty,
     price: c.price ? c.price.usd : null, src: c.price ? c.price.src : "", manual: false, at: Date.now(), added: Date.now() });
   recordPrice(lib[lib.length - 1]);
   saveLib(); sortByAddedAfterAdd();
@@ -3002,7 +3053,9 @@ async function zhCnByName(en, num) {
     out.push({ lang: "zh-cn", id: `pc${p.id}`, localId: lid, name: m[1] + (m[2] ? " " + m[2] : ""), pcq: `${p.set} ${m[1]} #${n}`, pcImg: p.img || "",
       setId: "", setName: String(p.set).replace(/^Pokemon\s*/i, ""), official: null, rel: null });
   }
-  return out;
+  // 官方卡表里有的换成官方卡（中文卡名、官图、系列名）
+  try { await loadCnDex(); } catch { return out; }
+  return out.map((x) => { const c = cnIdx.byPc.get(x.id.slice(2)); return c ? cnCardOf(c) : x; });
 }
 const PAGE = 12;
 function showList(cands, title) {
@@ -3331,6 +3384,8 @@ const RANGE_DAYS = { month: 31, quarter: 92, annual: 366, y3: 1096, y5: 1827, al
 const LONG_RANGE = new Set(["y3", "y5", "all"]);
 // 大图：TCGplayer 1000 像素、PriceCharting 1600、TCGdex high
 function hiresOf(x) {
+  const off = x.lang === "zh-cn" ? cnOfficialImg(cnRow(x)) || (String(x.pcImg || "").includes("PTCG-CHS") ? x.pcImg : "") : "";
+  if (off) return off;
   if (x.tpId && !x.noImg) return `https://tcgplayer-cdn.tcgplayer.com/product/${x.tpId}_in_1000x1000.jpg`;
   if (x.pcImg) return x.pcImg.replace(/\/\d+\.jpg$/, "/1600.jpg");
   if (x.image) return x.image + "/high.webp";
@@ -3402,7 +3457,7 @@ function renderVersions(cur, list) {
     b.innerHTML = `<div class="im"><span>暂无图片</span></div><div><span class="lang-pill" data-l="${v.lang}">${LANGS[v.lang]}</span></div>
       <div class="t">${esc(v.setId || "")} ${esc(v.localId || "")}${v.var ? " " + esc(v.var) : ""}</div><div class="p"${usd != null ? ` data-usd="${usd}"` : ""}>${usd != null ? fmt(usd) : v.price === undefined ? "…" : "—"}</div>`;
     const src = v.img || imgSources(v)[0];
-    if (src) { const im = document.createElement("img"); im.alt = ""; im.loading = "lazy"; im.onerror = () => im.remove(); im.src = src; b.querySelector(".im").appendChild(im); }
+    if (src) { const im = document.createElement("img"); im.alt = ""; im.loading = "lazy"; im.onerror = () => { if (v.img2 && im.src !== v.img2) im.src = v.img2; else im.remove(); }; im.src = src; b.querySelector(".im").appendChild(im); }
     b.onclick = () => { if (v.id !== cur.id) openHistory(v); };
     box.appendChild(b); tiles.push([v, b.querySelector(".p")]);
   }
@@ -3440,7 +3495,7 @@ async function loadHistory() {
     // 长期：PriceCharting 月度裸卡价（最早到 2020 年底）
     const name = String(x.tpName || x.name).replace(/\s*-\s*\d+\/\d+.*$/, "").replace(/\s*\(.*?\)\s*/g, " ").trim();
     const setEn = String(x.tpSet || x.setName || "").replace(/^[^:]*:\s*/, "");
-    const n = parseInt(x.localId, 10) || "";
+    const n = parseInt(x.pcNum || x.localId, 10) || "";
     const q = pcOnly ? x.pcq : `${name} ${n} ${setEn}${x.lang === "ja" || x.lang === "zh-tw" ? " japanese" : ""}`.replace(/\s+/g, " ").trim();
     try {
       const j = await getJSON(`${base}?pc=${encodeURIComponent(q)}&n=${n}`, `pc.${q.toLowerCase()}`, 24 * 3600e3);
