@@ -588,7 +588,7 @@ async function getIndex() {
 // 浏览器不能直接读 TCGplayer，经过价格中转（worker.js）取数据；本地预览时用 serve.ps1 自带的 /tcgp
 // 内置的价格服务器地址（部署好 worker.js 后填在这里，所有人打开就能用，不用各自设置）
 // 每次更新改这里：页面左上角会显示，用来确认手机打开的是不是新版
-const APP_VERSION = "11.27 · 简中官图";
+const APP_VERSION = "11.27b · 简中官图";
 $("appVer").textContent = "版本 " + APP_VERSION;
 $("footLine").textContent = `© ${new Date().getFullYear()} PTCG Price · ptcgprice.com (v${APP_VERSION.split(" ")[0]})`;
 // 价格服务器：自己的域名（workers.dev 在中国被屏蔽；旧地址 https://ptcgprice.yuquanlin17.workers.dev 仍然可用）
@@ -3149,7 +3149,8 @@ $("manualForm").onsubmit = async (e) => {
   const parsed = parseText(s2, true);
   if (parsed.nums.length && qs.length === 1) {
     const idx = await getIndex().catch(() => null);
-    const isCode = (t) => idx && LANG_KEYS.some((l) => idx[l] && idx[l].map.has(t));
+    // 简中代码（151C、30th C、C…C）有的不在系列表里，也算代码
+    const isCode = (t) => ZH_CODE.test(String(t).toUpperCase()) || (idx && LANG_KEYS.some((l) => idx[l] && idx[l].map.has(t)));
     if (parsed.tokens.some(isCode) || /^[\d\s\/]+$/.test(s2)) return void (await showResults(parsed, false));
   }
   if (await nameSearch(qs, aliased ? s : null)) return;
