@@ -55,7 +55,10 @@ const CSS = `
 .dex-card .im { aspect-ratio: 63 / 88; border-radius: 6px; overflow: hidden; background: var(--line); display: flex; align-items: center; justify-content: center; position: relative; }
 .dex-card .im img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .2s; }
 .dex-card .im img.ok, .dex-set .ic img.ok { opacity: 1; }
-.dex-card .im b { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.dex-card .im { flex-direction: column; gap: 3px; text-align: center; padding: 4px; }
+.dex-card .im b { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.dex-card .im small { font-size: 10.5px; color: var(--muted); font-family: var(--mono); opacity: .8; overflow-wrap: anywhere; }
+.dex-card .im[data-none] { background: repeating-linear-gradient(135deg, var(--line) 0 8px, transparent 8px 16px), var(--line); }
 .dex-card .nm { font-weight: 700; font-size: 13px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dex-card .sb { font-size: 11px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dex-card .pr { font-family: var(--mono); font-weight: 700; font-size: 13.5px; color: var(--bad); }
@@ -101,12 +104,23 @@ function build() {
 async function loadBase() {
   if (!base) base = (async () => {
     const L = await ctx.searchLib();
-    const sets = await fetch("vis/sets.json").then((r) => r.json()).catch(() => ({ sets: [] }));
+    const [sets, noimg] = await Promise.all([
+      fetch("vis/sets.json").then((r) => r.json()).catch(() => ({ sets: [] })),
+      fetch("vis/noimg.json").then((r) => r.json()).catch(() => ({})),
+    ]);
+    // TCGplayer 上还没有卡图的卡（很多球纹版、新预售）也列出来：先用「暂无图片」占位，价格、收藏照常
+    const meta = { sets: L.meta.sets.slice(), items: L.meta.items.slice() }, nImg = L.meta.items.length;
+    const setIx = new Map(meta.sets.map((s, i) => [s[1] + "|" + s[0], i]));
+    for (const [id, v] of Object.entries(noimg)) {
+      const [k, , n, name, r, rel] = v; if (!k || !name) continue;
+      if (!setIx.has(k)) { const bar = k.indexOf("|"); setIx.set(k, meta.sets.length); meta.sets.push([k.slice(bar + 1), k.slice(0, bar)]); }
+      meta.items.push([+id, setIx.get(k), n || "", name, r || "", rel || ""]);
+    }
     // 卡图库按系列分组
     const bySet = new Map();
     // 线上用的兑换码卡（Code Card）不是实体卡，不列
-    L.meta.items.forEach((it, i) => { if (/^Code Card/i.test(it[3])) return; const s = L.meta.sets[it[1]], k = s[1] + "|" + s[0]; if (!bySet.has(k)) bySet.set(k, []); bySet.get(k).push(i); });
-    return { ...L, sets: sets.sets || [], bySet, cn: null, tw: null };
+    meta.items.forEach((it, i) => { if (/^Code Card/i.test(it[3])) return; const s = meta.sets[it[1]], k = s[1] + "|" + s[0]; if (!bySet.has(k)) bySet.set(k, []); bySet.get(k).push(i); });
+    return { ...L, meta, nImg, sets: sets.sets || [], bySet, cn: null, tw: null };
   })().catch((e) => { base = null; throw e; });
   return base;
 }
@@ -172,9 +186,46 @@ async function setList(B) {
 function jaEnCard(B, i, set) {
   const it = B.meta.items[i], s = B.meta.sets[it[1]], line = s[1] === "en" ? "pokemon" : "pokemon-japan";
   const [n, total] = String(it[2]).split("/");
-  return { lang: s[1], tpOnly: true, tpId: it[0], id: "tp" + it[0], name: zhName(B, it[3]), enName: it[3], setName: s[0], setId: set ? set.code : s[0].split(":")[0],
+  const noImg = i >= B.nImg;
+  const c = { lang: s[1], tpOnly: true, tpId: it[0], id: "tp" + it[0], name: zhName(B, it[3]), enName: it[3], setName: s[0], setId: set ? set.code : s[0].split(":")[0],
     localId: n || "", official: parseInt(total, 10) || null, tpNum: it[2], rel: it[5] || null, rar: RAR[it[4]] || "", var: varOf(it[3]), num: numOf(it[2]),
-    img: `https://tcgplayer-cdn.tcgplayer.com/product/${it[0]}_200w.jpg`, slug: set && set.slug, line, price: undefined };
+    img: noImg ? "" : `https://tcgplayer-cdn.tcgplayer.com/product/${it[0]}_200w.jpg`, noImg, slug: (set && set.slug) || slugFor(B, s), line, price: undefined, _i: i };
+  c.goSet = () => goSet(s[1], s[1] + "|" + s[0]);
+  c.versions = () => versionsJaEn(B, c);
+  c.loadPrices = priceList;
+  return c;
+}
+function slugFor(B, s) { const x = B.sets.find((y) => y.l === s[1] && y.name === s[0]); return x && x.slug; }
+// 卡片详情：还没查到价格的（本卡、其他版本）一起查
+const priceList = (list) => fillPrices(list.filter((v) => v.price === undefined), { cur: false });
+// 从卡片详情跳到它那一套
+function goSet(lang, key) {
+  st.lang = lang; ctx.store.set("ptcg.dexLang", lang); st.q = ""; st.set = key; st.goKind = true; st.rar.clear();
+  if (root) { const inp = root.querySelector("input"); if (inp) inp.value = ""; }
+  ctx.go("dex"); render();
+}
+// 其他版本（日版 / 美版）：同名、卡图特征很像的（同一张画：日美版、球纹、镜面、复刻、印章版）
+async function versionsJaEn(B, c) {
+  const base = baseEn(c.enName).toLowerCase(), same = [];
+  B.meta.items.forEach((it, i) => { if (baseEn(it[3]).toLowerCase() === base && !/^Code Card/i.test(it[3])) same.push(i); });
+  let pick;
+  if (c.noImg) {
+    // 没卡图就没有特征：同名同编号的（日版 / 美版、各种版本）
+    pick = same.filter((i) => numOf(B.meta.items[i][2]) === c.num && c.num != null);
+  } else {
+    const X = await ctx.getVecIndex();
+    if (!X.pos) { X.pos = new Map(); X.meta.items.forEach((it, j) => X.pos.set(it[0], j)); }
+    const a = X.pos.get(c.tpId);
+    if (a == null) pick = [c._i];
+    else {
+      const { vecs, inv, D } = X, cos = (b) => { let t = 0; for (let k = 0; k < D; k++) t += vecs[a * D + k] * vecs[b * D + k]; return t * inv[a] * inv[b]; };
+      const sc = new Map();
+      for (const i of same) { const it = B.meta.items[i], b = X.pos.get(it[0]); if (i === c._i) sc.set(i, 2); else if (b != null) { const v = cos(b); if (v >= 0.78) sc.set(i, v); } else if (numOf(it[2]) === c.num) sc.set(i, 0.5); }
+      pick = [...sc.keys()].sort((x, y) => sc.get(y) - sc.get(x));
+    }
+  }
+  if (!pick.includes(c._i)) pick.unshift(c._i);
+  return pick.slice(0, 16).map((i) => (i === c._i ? c : jaEnCard(B, i, null)));
 }
 
 // ---------- 画面 ----------
@@ -186,6 +237,7 @@ async function render() {
   let B;
   try { B = await loadBase(); } catch (e) { grid.innerHTML = `<div class="dex-note" style="grid-column:1/-1">载入失败：${ctx.esc(e.message)}</div>`; return; }
   curSets = await setList(B).catch(() => []);
+  if (st.goKind) { st.goKind = false; const w = curSets.find((s) => s.key === st.set); if (w) st.kind = w.kind; }
   const kinds = [...new Set(curSets.map((s) => s.kind))];
   if (!kinds.includes(st.kind)) st.kind = kinds[0] || "pack";
   root.querySelector("[data-kinds]").innerHTML = st.q ? "" : Object.entries(KINDS).filter(([k]) => kinds.includes(k)).map(([k, v]) => `<button data-k="${k}" aria-pressed="${k === st.kind}">${v}</button>`).join("");
@@ -245,15 +297,32 @@ async function setCards(B, s) {
   return ((d && d.cards) || []).map((c) => twCard(c, s, jp));
 }
 function cnCard(B, c, set) {
-  const [id, , num, name, variant, img, price] = c;
-  return { lang: "zh-cn", id: "pc" + id, name: zhName(B, name) + (variant ? `（${VARS[variant.toLowerCase()] ? VARS[variant.toLowerCase()].replace(/闪$/, "") : variant}）` : ""), enName: name,
+  const [id, si, num, name, variant, img, price, g9, psa10] = c;
+  const o = { lang: "zh-cn", id: "pc" + id, name: zhName(B, name) + (variant ? `（${VARS[variant.toLowerCase()] ? VARS[variant.toLowerCase()].replace(/闪$/, "") : variant}）` : ""), enName: name,
     setName: set.name, setId: set.code, localId: String(num).padStart(3, "0"), num: numOf(num), rar: "", var: variant ? VARS[variant.toLowerCase()] || variant : "",
     pcq: `${set.slug.replace(/-/g, " ")} ${name}${variant ? ` [${variant}]` : ""} #${num}`, pcImg: img ? `https://storage.googleapis.com/images.pricecharting.com/${img}/240.jpg` : "",
-    img: img ? `https://storage.googleapis.com/images.pricecharting.com/${img}/240.jpg` : "", rel: set.rel || null, price: price != null ? { usd: price, src: "PriceCharting" } : null };
+    img: img ? `https://storage.googleapis.com/images.pricecharting.com/${img}/240.jpg` : "", rel: set.rel || null, price: price != null ? { usd: price, src: "PriceCharting" } : null,
+    graded: g9 || psa10 ? { g9, psa10 } : null };
+  o.goSet = () => goSet("zh-cn", "cn|" + set.slug);
+  // 其他版本：同一套同编号（普通 / 闪 / 镜面 / 印章…）
+  o.versions = async () => B.cn.cards.filter((x) => x[1] === si && numOf(x[2]) === numOf(num)).map((x) => (x === c ? o : cnCard(B, x, set)));
+  return o;
 }
 function twCard(c, s, jp) {
-  return { lang: "zh-tw", id: c.id, name: String(c.name).replace(/^<([^>]+)>/, "$1"), setName: s.name, setId: s.code, localId: c.localId, num: numOf(c.localId), rar: "", var: "",
+  const o = { lang: "zh-tw", id: c.id, name: String(c.name).replace(/^<([^>]+)>/, "$1"), setName: s.name, setId: s.code, localId: c.localId, num: numOf(c.localId), rar: "", var: "",
     image: c.image || "", img: c.image ? c.image + "/low.webp" : "", jpSlug: jp && jp.slug, rel: null, price: undefined };
+  o.goSet = () => goSet("zh-tw", "tw|" + s.code);
+  // 其他版本：同代码同编号的日版卡（繁中和日版是同一套）
+  if (jp) o.versions = async () => {
+    const B = await loadBase(), idx = B.bySet.get("ja|" + jp.name) || [];
+    const ja = idx.filter((i) => numOf(B.meta.items[i][2]) === o.num).map((i) => jaEnCard(B, i, { code: s.code, slug: jp.slug }));
+    const more = ja[0] ? (await ja[0].versions().catch(() => ja)) : [];
+    const list = [o, ...more.filter((v) => !ja.some((x) => x.id === v.id)), ...ja];
+    const seen = new Set();
+    return list.filter((v) => !seen.has(v.id) && seen.add(v.id));
+  };
+  o.loadPrices = priceList;
+  return o;
 }
 
 // ---------- 搜索 ----------
@@ -290,8 +359,12 @@ async function searchCards(B) {
 let priceToken = 0;
 async function loadPrices() {
   const my = ++priceToken;
+  await fillPrices(curCards, { cur: true, my });
+  if (my === priceToken && st.sort.startsWith("price")) showCards();
+}
+async function fillPrices(list, { cur, my }) {
   const groups = new Map();
-  for (const c of curCards) {
+  for (const c of list) {
     if (c.price !== undefined) continue;
     const k = c.lang === "zh-tw" ? c.jpSlug && "pokemon-japan|" + c.jpSlug : c.slug && c.line + "|" + c.slug;
     if (!k) { c.price = null; continue; }
@@ -303,14 +376,13 @@ async function loadPrices() {
     if (++i > 25) { cards.forEach((c) => (c.price = null)); continue; } // 搜索结果跨很多系列时只查前 25 套
     const [line, slug] = k.split("|");
     const m = await setPrices(slug, line);
-    if (my !== priceToken) return;
+    if (cur && my !== priceToken) return;
     if (cards[0].lang === "zh-tw") {
       const byNum = new Map(); for (const x of m.values()) { const n = numOf(x.number); if (n && !byNum.has(n) && !/\(|\[/.test(x.name)) byNum.set(n, x); }
       for (const c of cards) { const x = byNum.get(c.num); c.price = x && x.price != null ? { usd: x.price, src: "TCGplayer（日版参考）" } : null; if (x) c.tpId = x.id; }
     } else for (const c of cards) { const x = m.get(c.tpId); c.price = x && x.price != null ? { usd: x.price, src: "TCGplayer" } : null; }
-    updatePrices(cards);
+    if (cur) updatePrices(cards);
   }
-  if (my === priceToken && st.sort.startsWith("price")) showCards();
 }
 function updatePrices(cards) {
   for (const c of cards) {
@@ -360,13 +432,13 @@ function paint() {
 function tile(c) {
   const el = document.createElement("div"); el.className = "dex-card";
   const usd = c.price && c.price.usd;
-  el.innerHTML = `<div class="im"><b>${ctx.esc(c.setId)} ${ctx.esc(c.localId)}</b></div><div class="nm">${ctx.esc(c.name)}</div>
+  el.innerHTML = `<div class="im"${c.img ? "" : ' data-none="1"'}><b>${c.img ? "" : "暂无图片"}</b><small>${ctx.esc(c.setId)} ${ctx.esc(c.localId)}</small></div><div class="nm">${ctx.esc(c.name)}</div>
     <div class="sb">${ctx.esc((c.tpNum || c.localId || "") + (rarKey(c) ? " · " + rarKey(c) : ""))}</div>
     <div class="${usd != null ? "pr" : "pr na"}"${usd != null ? ` data-usd="${usd}"` : ""}>${usd != null ? ctx.fmt(usd) : c.price === undefined ? "查价格中…" : "暂无价格"}</div>
     <button class="add" aria-label="加入收藏" title="加入收藏">+</button>`;
-  // 图片直接放进格子（lazy 的图要在页面上才会开始下载），下载失败就留着「系列 编号」的占位字
+  // 图片直接放进格子（lazy 的图要在页面上才会开始下载），没有图 / 下载失败就显示「暂无图片」
   if (c.img) { const b = el.querySelector(".im"), im = document.createElement("img"); im.loading = "lazy"; im.alt = "";
-    im.onload = () => im.classList.add("ok"); im.onerror = () => im.remove(); im.src = c.img; b.appendChild(im); }
+    im.onload = () => im.classList.add("ok"); im.onerror = () => { im.remove(); c.noImg = true; b.dataset.none = "1"; b.querySelector("b").textContent = "暂无图片"; }; im.src = c.img; b.appendChild(im); }
   el.onclick = (e) => { if (e.target.closest(".add")) return; ctx.openHistory(c); };
   el.querySelector(".add").onclick = () => { ctx.addToLib({ ...c, price: c.price || null }, 1); ctx.toast(`已加入收藏：${c.name}`); };
   c._el = el;

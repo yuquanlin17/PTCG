@@ -61,9 +61,11 @@ for (const slug of [...slugs].sort()) {
       const title = ((row.match(/<td class="title"[^>]*>\s*<a[^>]*>([^<]*)<\/a>/) || [])[1] || "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").trim();
       const tm = title.match(/^(.*?)\s*(?:\[(.*?)\])?\s*#\s*([\w-]+)\s*$/);
       const img = (row.match(/images\.pricecharting\.com\/([\w-]+)\/\d+\.jpg/) || [])[1] || "";
-      const price = parseFloat(((row.match(/used_price">\s*<span class="js-price">\s*\$?([\d,.]+)/) || [])[1] || "").replace(/,/g, "")) || null;
+      // 三栏价格：裸卡（Ungraded）、Grade 9、PSA 10
+      const col = (cls) => parseFloat(((row.match(new RegExp(cls + '">\\s*<span class="js-price">\\s*\\$?([\\d,.]+)')) || [])[1] || "").replace(/,/g, "")) || null;
+      const price = col("used_price"), g9 = col("cib_price"), psa10 = col("new_price");
       if (!tm) continue; // 补充包、卡盒等不是单卡的商品
-      cards.push([+id, si, tm[3], tm[1], tm[2] || "", img, price]);
+      cards.push([+id, si, tm[3], tm[1], tm[2] || "", img, price, g9, psa10]);
       n++;
     }
     if (rows.length < 150) break;
